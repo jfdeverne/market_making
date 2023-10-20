@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using KGClasses;
 
 namespace StrategyRunner
@@ -6,9 +7,11 @@ namespace StrategyRunner
     public class Orders
     {
         Strategy mStrategy;
+        List<int /*internalOrderNumber*/> mPendingCancels;
         public Orders(Strategy strategy)
         {
             mStrategy = strategy;
+            mPendingCancels = new List<int>();
         }
 
         private void Log(string message)
@@ -70,16 +73,29 @@ namespace StrategyRunner
             return ord.internalOrderNumber;
         }
 
-        public void CancelOrder(KGOrder ord)
+        public void OnOrder(KGOrder ord)
+        {
+            if (mPendingCancels.Contains(ord.internalOrderNumber))
+            {
+                CancelOrder(ord);
+                mPendingCancels.Remove(ord.internalOrderNumber);
+                Log(String.Format("pending cancel: cancel order {0}", ord.internalOrderNumber));
+            }
+        }
+
+        public bool CancelOrder(KGOrder ord)
         {
             if (orderInTransientState(ord))
             {
-                Log("ERR: CancelOrder failed, order in transient state");
-                return;
+                //Log("ERR: CancelOrder failed, order in transient state");
+                mPendingCancels.Add(ord.internalOrderNumber);
+                Log(String.Format("pending cancel: transient order {0}", ord.internalOrderNumber));
+                return false;
             }
 
             ord.orderStatus = 41;
             mStrategy.API.PostOrder(ord, mStrategy.stgID);
+            return true;
         }
 
         public void CancelOrder(int id)

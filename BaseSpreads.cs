@@ -17,7 +17,6 @@ namespace Detail
 
 namespace StrategyRunner
 {
-
 	public class BaseSpreads
 	{
         Quoter mQuoter;

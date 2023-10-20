@@ -64,8 +64,6 @@ namespace StrategyRunner
         public int numAllInstruments;
         public int numInstrumentsInVenue;
 
-        bool activeStopOrders = false;
-
         VI leanInstrument;
         VI quoteInstrument;
         VI quoteFarInstrument;
@@ -313,7 +311,7 @@ namespace StrategyRunner
 
         private bool pricesAreEqual(double price1, double price2)
         {
-            return Math.Abs(price1 - price2) < 1e-4;
+            return Math.Abs(price1 - price2) < 1e-5;
         }
 
         private bool shouldQuote(VIT viLean)
@@ -683,6 +681,18 @@ namespace StrategyRunner
             {
                 CancelStrategy(String.Format("order {0} rejected", ord.internalOrderNumber));
                 return;
+            }
+
+            int instrumentIndex = ord.index + API.n * ord.VenueID;
+
+            if (ord.orderStatus == 41)
+            {
+                hedging.OnOrder(ord, instrumentIndex);
+            }
+
+            if (!orders.orderInTransientState(ord))
+            {
+                orders.OnOrder(ord);
             }
         }
     }
