@@ -31,6 +31,7 @@ namespace StrategyRunner
         public int stgID;
         public char systemTradingMode;
         public Orders orders;
+        public bool activeStopOrders;
 
     }
 }
