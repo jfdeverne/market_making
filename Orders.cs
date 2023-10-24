@@ -7,11 +7,9 @@ namespace StrategyRunner
     public class Orders
     {
         Strategy mStrategy;
-        List<int /*internalOrderNumber*/> mPendingCancels;
         public Orders(Strategy strategy)
         {
             mStrategy = strategy;
-            mPendingCancels = new List<int>();
         }
 
         private void Log(string message)
@@ -73,23 +71,11 @@ namespace StrategyRunner
             return ord.internalOrderNumber;
         }
 
-        public void OnOrder(KGOrder ord)
-        {
-            if (mPendingCancels.Contains(ord.internalOrderNumber))
-            {
-                CancelOrder(ord);
-                mPendingCancels.Remove(ord.internalOrderNumber);
-                Log(String.Format("pending cancel: cancel order {0}", ord.internalOrderNumber));
-            }
-        }
-
         public bool CancelOrder(KGOrder ord)
         {
             if (orderInTransientState(ord))
             {
-                //Log("ERR: CancelOrder failed, order in transient state");
-                mPendingCancels.Add(ord.internalOrderNumber);
-                Log(String.Format("pending cancel: transient order {0}", ord.internalOrderNumber));
+                Log("ERR: CancelOrder failed, order in transient state");
                 return false;
             }
 

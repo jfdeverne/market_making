@@ -685,14 +685,9 @@ namespace StrategyRunner
 
             int instrumentIndex = ord.index + API.n * ord.VenueID;
 
-            if (ord.orderStatus == 41)
+            if (!orders.orderInTransientState(ord) && ord.bidSize < 0 && ord.askSize < 0)
             {
                 hedging.OnOrder(ord, instrumentIndex);
-            }
-
-            if (!orders.orderInTransientState(ord))
-            {
-                orders.OnOrder(ord);
             }
         }
     }

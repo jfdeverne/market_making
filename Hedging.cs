@@ -624,22 +624,10 @@ namespace StrategyRunner
         {
             if (mPendingResubmissions.ContainsKey(ord.internalOrderNumber))
             {
-                if (ord.bidSize > 0)
-                {
-                    Side side = Side.BUY;
-                    double price = ord.bid;
-                    int size = ord.bidSize + mPendingResubmissions[ord.internalOrderNumber];
-                    mOrders.SendOrder(ord, instrumentIndex, side, price, size, "HEDGE");
-                    mPendingResubmissions.Remove(ord.internalOrderNumber);
-                }
-                else if (ord.askSize > 0)
-                {
-                    Side side = Side.SELL;
-                    double price = ord.ask;
-                    int size = ord.askSize + mPendingResubmissions[ord.internalOrderNumber];
-                    mOrders.SendOrder(ord, instrumentIndex, side, price, size, "HEDGE");
-                    mPendingResubmissions.Remove(ord.internalOrderNumber);
-                }
+                int size = mPendingResubmissions[ord.internalOrderNumber];
+                mPendingResubmissions.Remove(ord.internalOrderNumber);
+
+                Hedge(size, Source.NEAR);
             }
         }
 
