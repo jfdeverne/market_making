@@ -34,6 +34,7 @@ namespace StrategyRunner
         public static int maxCrossVolume = 0;
 
         public static bool bvEnabled = false;
+        public static bool limitBvEnabled = false;
 
         public static int bvThrottleVolume = 0;
         public static int bvThrottleSeconds = 0;

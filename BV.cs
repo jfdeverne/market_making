@@ -5,6 +5,7 @@ using StrategyLib;
 using System.Timers;
 using Detail;
 using System.Xml;
+using System.Runtime.Remoting.Messaging;
 
 namespace Detail
 {
@@ -13,6 +14,12 @@ namespace Detail
         NEUTRAL = 0,
         BUY = 1,
         SELL = 2
+    }
+
+    public enum HedgeReason
+    {
+        TIMEOUT = 0,
+        PNL_DROP = 1
     }
 }
 
@@ -184,6 +191,12 @@ namespace StrategyRunner
             }
         }
 
+        private void Log(string message)
+        {
+            API.Log(String.Format("STG {0}: {1}", stgID, message));
+            API.SendToRemote(message, KGConstants.EVENT_GENERAL_INFO);
+        }
+
         public override void OnStatusChanged(int status)
         {
             if (status == 0)
@@ -240,8 +253,15 @@ namespace StrategyRunner
             return orders.SendOrder(buyFar, quoteFarIndex, Side.BUY, asks[quoteFarIndex].price, n, "BV");
         }
 
-        private void HedgeLeftovers()
+        private void HedgeLeftovers(HedgeReason reason)
         {
+            int volume = pendingBuys - pendingSells;
+            if (volume == 0)
+            {
+                return;
+            }
+
+            Log(String.Format("BV: hedging leftovers, volume={0}, reason={1}", volume, reason));
             hedging.Hedge(pendingBuys - pendingSells, Source.NEAR);
             pendingBuys = 0;
             pendingSells = 0;
@@ -250,7 +270,7 @@ namespace StrategyRunner
 
         private void OnTimeout(object sender, ElapsedEventArgs e)
         {
-            HedgeLeftovers();
+            HedgeLeftovers(HedgeReason.TIMEOUT);
             pendingTrades.Clear();
         }
 
@@ -285,7 +305,7 @@ namespace StrategyRunner
                 else
                 {
                     int orderId = SellNear(volume);
-                    pendingTrades.Add(orderId, volume);
+                    pendingTrades[quoteIndex] = volume;
                 }
 
                 pendingBuys += volume;
@@ -321,7 +341,7 @@ namespace StrategyRunner
                 else
                 {
                     int orderId = BuyNear(volume);
-                    pendingTrades.Add(orderId, volume);
+                    pendingTrades[quoteIndex] = -volume;
                 }
 
                 pendingBuys += volume;
@@ -423,12 +443,12 @@ namespace StrategyRunner
                 double theo = GetVwap(bids[instrumentIndex], asks[instrumentIndex]);
                 theos[instrumentIndex] = theo; //TODO: temporary, remove once theos in system
 
-                positionValue = (pendingBuys - pendingSells) * theo;
-                pnl = cashflow + positionValue;
+                positionValue = (pendingSells - pendingBuys) * theo;
+                pnl = (cashflow + positionValue) * 2500;
 
-                if (pnl < P.bvMaxLoss)
+                if (pnl < -P.bvMaxLoss)
                 {
-                    HedgeLeftovers();
+                    HedgeLeftovers(HedgeReason.PNL_DROP);
                 }
 
                 if (!API.PassedTradeStart())
@@ -441,11 +461,15 @@ namespace StrategyRunner
                     return;
                 }
 
-                if (P.bvEnabled)
+                if (P.bvEnabled && pendingBuys == 0 && pendingSells == 0) //TODO: once logic verified, consider calling TakeCross(Direction.BUY) when pendingBuys > 0 and vice versa
+                {
+                    TakeCross(Direction.NEUTRAL);
+                }
+
+                if (P.limitBvEnabled)
                 {
                     InsertAtMid(instrumentIndex);
                     CancelOnPriceMove(instrumentIndex);
-                    TakeCross(0);
                 }
 
                 if (activeStopOrders)
@@ -488,7 +512,7 @@ namespace StrategyRunner
                     }
                     else if (volume < 0)
                     {
-                        SellFar(volume);
+                        SellFar(-volume);
                     }
                 }
                 else if (instrumentIndex == quoteFarIndex)
@@ -499,7 +523,7 @@ namespace StrategyRunner
                     }
                     else if (volume < 0)
                     {
-                        SellNear(volume);
+                        SellNear(-volume);
                     }
                 }
                 pendingTrades.Remove(instrumentIndex);
