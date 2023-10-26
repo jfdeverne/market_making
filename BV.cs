@@ -373,12 +373,12 @@ namespace StrategyRunner
                 if (!orders.orderInUse(limitBuyFar) && pricesAreEqual(mid, bids[quoteFarIndex].price))
                 {
                     int orderId = orders.SendOrder(limitBuyFar, quoteFarIndex, Side.BUY, bids[quoteFarIndex].price, Math.Min(bids[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
-                    limitOrders.Add(orderId);
+                    limitOrders.Add(instrumentIndex);
                 }
                 else if (!orders.orderInUse(limitSellFar) && pricesAreEqual(mid, asks[quoteFarIndex].price))
                 {
                     int orderId = orders.SendOrder(limitSellFar, quoteFarIndex, Side.SELL, asks[quoteFarIndex].price, Math.Min(asks[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
-                    limitOrders.Add(orderId);
+                    limitOrders.Add(instrumentIndex);
                 }
             }
             else if (instrumentIndex == quoteFarIndex)
@@ -388,12 +388,12 @@ namespace StrategyRunner
                 if (!orders.orderInUse(limitBuy) && pricesAreEqual(mid, bids[quoteIndex].price))
                 {
                     int orderId = orders.SendOrder(limitBuy, quoteIndex, Side.BUY, bids[quoteIndex].price, Math.Min(bids[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
-                    limitOrders.Add(orderId);
+                    limitOrders.Add(instrumentIndex);
                 }
                 else if (!orders.orderInUse(limitSell) && pricesAreEqual(mid, asks[quoteIndex].price))
                 {
                     int orderId = orders.SendOrder(limitSell, quoteIndex, Side.SELL, asks[quoteIndex].price, Math.Min(asks[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
-                    limitOrders.Add(orderId);
+                    limitOrders.Add(instrumentIndex);
                 }
             }
         }
@@ -407,12 +407,12 @@ namespace StrategyRunner
                 if (orders.orderInUse(limitBuyFar) && !pricesAreEqual(mid, bids[quoteFarIndex].price))
                 {
                     orders.CancelOrder(limitBuyFar);
-                    limitOrders.Remove(limitBuyFar.internalOrderNumber);
+                    limitOrders.Remove(instrumentIndex);
                 }
                 else if (orders.orderInUse(limitSellFar) && !pricesAreEqual(mid, asks[quoteFarIndex].price))
                 {
                     orders.CancelOrder(limitSellFar);
-                    limitOrders.Remove(limitSellFar.internalOrderNumber);
+                    limitOrders.Remove(instrumentIndex);
                 }
             }
             else if (instrumentIndex == quoteFarIndex)
@@ -422,12 +422,12 @@ namespace StrategyRunner
                 if (orders.orderInUse(limitBuy) && !pricesAreEqual(mid, bids[quoteIndex].price))
                 {
                     orders.CancelOrder(limitBuy);
-                    limitOrders.Remove(limitBuy.internalOrderNumber);
+                    limitOrders.Remove(instrumentIndex);
                 }
                 else if (orders.orderInUse(limitSell) && !pricesAreEqual(mid, asks[quoteIndex].price))
                 {
                     orders.CancelOrder(limitSell);
-                    limitOrders.Remove(limitSell.internalOrderNumber);
+                    limitOrders.Remove(instrumentIndex);
                 }
             }
         }
@@ -461,12 +461,13 @@ namespace StrategyRunner
                     return;
                 }
 
-                if (P.bvEnabled && pendingBuys == 0 && pendingSells == 0) //TODO: once logic verified, consider calling TakeCross(Direction.BUY) when pendingBuys > 0 and vice versa
+                if (P.bvEnabled && pendingBuys == 0 && pendingSells == 0)
                 {
                     TakeCross(Direction.NEUTRAL);
                 }
 
-                if (P.limitBvEnabled)
+                if (P.limitBvEnabled) //TODO: if price runs away when the limit order fills and the other leg misses, Hedge() may cause the other leg order to double on pnl drop.
+                                        //this is likely undesirable. Maybe we should cancel all strategy orders when Hedge() is called and account for any executions that may have occured.
                 {
                     InsertAtMid(instrumentIndex);
                     CancelOnPriceMove(instrumentIndex);
@@ -538,7 +539,7 @@ namespace StrategyRunner
                 {
                     if (amount < 0)
                     {
-                        BuyFar(amount);
+                        BuyFar(-amount);
                     }
                     else if (amount < 0)
                     {
@@ -549,7 +550,7 @@ namespace StrategyRunner
                 {
                     if (amount < 0)
                     {
-                        BuyNear(amount);
+                        BuyNear(-amount);
                     }
                     else if (amount > 0)
                     {

@@ -420,7 +420,7 @@ namespace StrategyRunner
             int index = info.leanInstrument != -1 ? info.leanInstrument : info.instrument;
             bool volumeAtStopPriceLow = (mStrategy.bids[index].price == info.stopPrice && mStrategy.bids[index].qty < info.stopVolume);
             bool marketRanAway = mStrategy.bids[index].price < info.stopPrice;
-            bool theoRanAway = mStrategy.theos[index] < info.stopPrice + 0.001;
+            bool theoRanAway = mStrategy.theos[index] < info.stopPrice - 0.001;
             return
                 (volumeAtStopPriceLow || marketRanAway)
                 && theoRanAway;
