@@ -553,6 +553,18 @@ namespace StrategyRunner
                     quote = false;
                 }
 
+                if (quoteBid >= asks[quoteIndex].price)
+                {
+                    CancelStrategy(String.Format("quote_bid={0} >= best_offer={1}", quoteBid, asks[quoteIndex].price));
+                    return;
+                }
+
+                if (quoteAsk <= bids[quoteIndex].price)
+                {
+                    CancelStrategy(String.Format("quote_ask={0} <= best_bid={1}", quoteAsk, bids[quoteIndex].price));
+                    return;
+                }
+
                 if (!orders.orderInUse(buy) && !orders.orderInTransientState(buy) && quote)
                 {
                     orders.SendOrder(buy, quoteIndex, Side.BUY, quoteBid, config.size, "MM");
