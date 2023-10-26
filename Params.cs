@@ -39,6 +39,9 @@ namespace StrategyRunner
         public static int bvThrottleVolume = 0;
         public static int bvThrottleSeconds = 0;
 
+        public static int quoteThrottleVolume = 0;
+        public static int quoteThrottleSeconds = 0;
+
         public static double bvTimeoutSeconds = 0;
         public static double bvMaxLoss = 0;
 

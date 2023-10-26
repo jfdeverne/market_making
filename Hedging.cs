@@ -36,18 +36,12 @@ namespace StrategyRunner
         Strategy mStrategy;
 
         KGOrder leanBuy;
-        KGOrder leanBuyFromFar;
         KGOrder leanSell;
-        KGOrder leanSellFromFar;
 
         KGOrder quotedBuy;
-        KGOrder quotedBuyFromFar;
         KGOrder quotedFarBuy;
-        KGOrder quotedFarBuyFromFar;
         KGOrder quotedSell;
-        KGOrder quotedSellFromFar;
         KGOrder quotedFarSell;
-        KGOrder quotedFarSellFromFar;
 
         KGOrder leanBuyMarket;
         KGOrder leanSellMarket;
@@ -80,44 +74,32 @@ namespace StrategyRunner
             mHedgeIndices.Add(mStrategy.leanIndex);
 
             leanBuy = new KGOrder();
-            leanBuyFromFar = new KGOrder();
             leanSell = new KGOrder();
-            leanSellFromFar = new KGOrder();
             leanBuyMarket = new KGOrder();
             leanSellMarket = new KGOrder();
 
             quotedBuy = new KGOrder();
-            quotedBuyFromFar = new KGOrder();
             quotedFarBuy = new KGOrder();
-            quotedFarBuyFromFar = new KGOrder();
             quotedFarBuyMarket = new KGOrder();
             quotedBuyMarket = new KGOrder();
 
             quotedSell = new KGOrder();
-            quotedSellFromFar = new KGOrder();
             quotedFarSell = new KGOrder();
-            quotedFarSellFromFar = new KGOrder();
             quotedSellMarket = new KGOrder();
             quotedFarSellMarket = new KGOrder();
 
             mStrategy.strategyOrders.Add(leanBuy);
-            mStrategy.strategyOrders.Add(leanBuyFromFar);
             mStrategy.strategyOrders.Add(leanSell);
-            mStrategy.strategyOrders.Add(leanSellFromFar);
             mStrategy.strategyOrders.Add(leanBuyMarket);
             mStrategy.strategyOrders.Add(leanSellMarket);
 
             mStrategy.strategyOrders.Add(quotedBuy);
             mStrategy.strategyOrders.Add(quotedFarBuy);
-            mStrategy.strategyOrders.Add(quotedBuyFromFar);
-            mStrategy.strategyOrders.Add(quotedFarBuyFromFar);
             mStrategy.strategyOrders.Add(quotedBuyMarket);
             mStrategy.strategyOrders.Add(quotedFarBuyMarket);
 
             mStrategy.strategyOrders.Add(quotedSell);
-            mStrategy.strategyOrders.Add(quotedSellFromFar);
             mStrategy.strategyOrders.Add(quotedFarSell);
-            mStrategy.strategyOrders.Add(quotedFarSellFromFar);
             mStrategy.strategyOrders.Add(quotedSellMarket);
             mStrategy.strategyOrders.Add(quotedFarSellMarket);
 
@@ -620,7 +602,7 @@ namespace StrategyRunner
             }
         }
 
-        public void OnOrder(KGOrder ord, int instrumentIndex)
+        public void OnOrder(KGOrder ord)
         {
             if (mPendingResubmissions.ContainsKey(ord.internalOrderNumber))
             {
@@ -631,18 +613,9 @@ namespace StrategyRunner
             }
         }
 
-        private void LimitPlusBuyLean(int n, Detail.HedgeKind kind, Detail.Source source)
+        private void LimitPlusBuyLean(int n)
         {
             var order = leanBuy;
-
-            switch (source)
-            {
-                case Source.NEAR:
-                    break;
-                case Source.FAR:
-                    order = leanBuyFromFar;
-                    break;
-            }
 
             int orderId = mOrders.SendOrder(order, mStrategy.leanIndex, Side.BUY, mStrategy.bids[mStrategy.leanIndex].price, n, "HEDGE");
             
@@ -657,18 +630,9 @@ namespace StrategyRunner
             PostStopOrder(mStrategy.leanIndex, mStrategy.leanIndex, mStrategy.bids[mStrategy.leanIndex].price, mStrategy.asks[mStrategy.leanIndex].price, n, GetLimitplusSize(n) + 200, Side.BUY, order.internalOrderNumber);
         }
 
-        private void LimitPlusSellLean(int n, Detail.HedgeKind kind, Detail.Source source)
+        private void LimitPlusSellLean(int n)
         {
             var order = leanSell;
-
-            switch (source)
-            {
-                case Source.NEAR:
-                    break;
-                case Source.FAR:
-                    order = leanSellFromFar;
-                    break;
-            }
 
             int orderId = mOrders.SendOrder(order, mStrategy.leanIndex, Side.SELL, mStrategy.asks[mStrategy.leanIndex].price, n, "HEDGE");
 
@@ -683,18 +647,9 @@ namespace StrategyRunner
             PostStopOrder(mStrategy.leanIndex, mStrategy.leanIndex, mStrategy.asks[mStrategy.leanIndex].price, mStrategy.bids[mStrategy.leanIndex].price, n, GetLimitplusSize(n) + 200, Side.SELL, order.internalOrderNumber);
         }
 
-        private void LimitPlusBuyQuoted(int n, Detail.HedgeKind kind, Detail.Source source)
+        private void LimitPlusBuyQuoted(int n)
         {
             var order = quotedBuy;
-
-            switch (source)
-            {
-                case Source.NEAR:
-                    break;
-                case Source.FAR:
-                    order = quotedBuyFromFar;
-                    break;
-            }
 
             int orderId = mOrders.SendOrder(order, mStrategy.quoteIndex, Side.BUY, mStrategy.bids[mStrategy.quoteIndex].price, n, "HEDGE");
 
@@ -709,18 +664,9 @@ namespace StrategyRunner
             PostStopOrder(mStrategy.quoteIndex, mStrategy.leanIndex, mStrategy.bids[mStrategy.quoteIndex].price, mStrategy.asks[mStrategy.leanIndex].price, n, GetLimitplusSize(n) + 200, Side.BUY, order.internalOrderNumber);
         }
 
-        private void LimitPlusBuyQuotedFar(int n, Detail.HedgeKind kind, Detail.Source source)
+        private void LimitPlusBuyQuotedFar(int n)
         {
             var order = quotedFarBuy;
-
-            switch (source)
-            {
-                case Source.NEAR:
-                    break;
-                case Source.FAR:
-                    order = quotedFarBuyFromFar;
-                    break;
-            }
 
             int orderId = mOrders.SendOrder(order, mStrategy.quoteFarIndex, Side.BUY, mStrategy.bids[mStrategy.quoteFarIndex].price, n, "HEDGE");
 
@@ -735,18 +681,9 @@ namespace StrategyRunner
             PostStopOrder(mStrategy.quoteFarIndex, mStrategy.leanIndex, mStrategy.bids[mStrategy.quoteFarIndex].price, mStrategy.asks[mStrategy.leanIndex].price, n, GetLimitplusSize(n) + 200, Side.BUY, order.internalOrderNumber);
         }
 
-        private void LimitPlusSellQuoted(int n, Detail.HedgeKind kind, Detail.Source source)
+        private void LimitPlusSellQuoted(int n)
         {
             var order = quotedSell;
-
-            switch (source)
-            {
-                case Source.NEAR:
-                    break;
-                case Source.FAR:
-                    order = quotedSellFromFar;
-                    break;
-            }
 
             int orderId = mOrders.SendOrder(order, mStrategy.quoteIndex, Side.SELL, mStrategy.asks[mStrategy.quoteIndex].price, n, "HEDGE");
 
@@ -761,7 +698,7 @@ namespace StrategyRunner
             PostStopOrder(mStrategy.quoteIndex, mStrategy.leanIndex, mStrategy.asks[mStrategy.quoteIndex].price, mStrategy.bids[mStrategy.leanIndex].price, n, GetLimitplusSize(n) + 200, Side.SELL, order.internalOrderNumber);
         }
 
-        private void LimitPlusSellQuotedFar(int n, Detail.HedgeKind kind, Detail.Source source)
+        private void LimitPlusSellQuotedFar(int n)
         {
             var order = quotedFarSell;
 
@@ -772,56 +709,47 @@ namespace StrategyRunner
                 return;
             }
 
-            switch (source)
-            {
-                case Source.NEAR:
-                    break;
-                case Source.FAR:
-                    order = quotedFarSellFromFar;
-                    break;
-            }
-
             int orderId = mOrders.SendOrder(order, mStrategy.quoteFarIndex, Side.SELL, mStrategy.asks[mStrategy.quoteFarIndex].price, n, "HEDGE");
             ManagePendingOrders(order.internalOrderNumber, -n);
             PostStopOrder(mStrategy.quoteFarIndex, mStrategy.leanIndex, mStrategy.asks[mStrategy.quoteFarIndex].price, mStrategy.bids[mStrategy.leanIndex].price, n, GetLimitplusSize(n) + 200, Side.SELL, order.internalOrderNumber);
         }
 
-        private int BuyLean(int n, Detail.HedgeKind kind)
+        private int BuyLean(int n)
         {
             int orderId = mOrders.SendOrder(leanBuyMarket, mStrategy.leanIndex, Side.BUY, mStrategy.asks[mStrategy.leanIndex].price, n, "HEDGE");
             ManagePendingOrders(orderId, n);
             return orderId;
         }
 
-        private int SellLean(int n, Detail.HedgeKind kind)
+        private int SellLean(int n)
         {
             int orderId = mOrders.SendOrder(leanSellMarket, mStrategy.leanIndex, Side.SELL, mStrategy.bids[mStrategy.leanIndex].price, n, "HEDGE");
             ManagePendingOrders(orderId, -n);
             return orderId;
         }
 
-        private int SellQuoted(int n, Detail.HedgeKind kind)
+        private int SellQuoted(int n)
         {
             int orderId = mOrders.SendOrder(quotedSellMarket, mStrategy.quoteIndex, Side.SELL, mStrategy.bids[mStrategy.quoteIndex].price, n, "HEDGE");
             ManagePendingOrders(orderId, -n);
             return orderId;
         }
 
-        private int BuyQuoted(int n, Detail.HedgeKind kind)
+        private int BuyQuoted(int n)
         {
             int orderId = mOrders.SendOrder(quotedBuyMarket, mStrategy.quoteIndex, Side.BUY, mStrategy.asks[mStrategy.quoteIndex].price, n, "HEDGE");
             ManagePendingOrders(orderId, n);
             return orderId;
         }
 
-        private int SellQuotedFar(int n, Detail.HedgeKind kind)
+        private int SellQuotedFar(int n)
         {
             int orderId = mOrders.SendOrder(quotedFarSellMarket, mStrategy.quoteFarIndex, Side.SELL, mStrategy.bids[mStrategy.quoteFarIndex].price, n, "HEDGE");
             ManagePendingOrders(orderId, -n);
             return orderId;
         }
 
-        private int BuyQuotedFar(int n, Detail.HedgeKind kind)
+        private int BuyQuotedFar(int n)
         {
             int orderId = mOrders.SendOrder(quotedFarBuyMarket, mStrategy.quoteFarIndex, Side.BUY, mStrategy.asks[mStrategy.quoteFarIndex].price, n, "HEDGE");
             ManagePendingOrders(orderId, n);
@@ -841,11 +769,11 @@ namespace StrategyRunner
             {
                 if (quantity < 0)
                 {
-                    LimitPlusSellQuoted(-quantity, HedgeKind.OUTRIGHT, source);
+                    LimitPlusSellQuoted(-quantity);
                 }
                 else if (quantity > 0)
                 {
-                    LimitPlusBuyQuoted(quantity, HedgeKind.OUTRIGHT, source);
+                    LimitPlusBuyQuoted(quantity);
                 }
                 return;
             }
@@ -854,11 +782,11 @@ namespace StrategyRunner
             {
                 if (quantity < 0)
                 {
-                    LimitPlusSellQuotedFar(-quantity, HedgeKind.OUTRIGHT, source);
+                    LimitPlusSellQuotedFar(-quantity);
                 }
                 else if (quantity > 0)
                 {
-                    LimitPlusBuyQuotedFar(quantity, HedgeKind.OUTRIGHT, source);
+                    LimitPlusBuyQuotedFar(quantity);
                 }
                 return;
             }
@@ -867,11 +795,11 @@ namespace StrategyRunner
             {
                 if (quantity < 0)
                 {
-                    LimitPlusSellLean(-quantity, HedgeKind.OUTRIGHT, source);
+                    LimitPlusSellLean(-quantity);
                 }
                 else if (quantity > 0)
                 {
-                    LimitPlusBuyLean(quantity, HedgeKind.OUTRIGHT, source);
+                    LimitPlusBuyLean(quantity);
                 }
                 return;
             }
@@ -890,12 +818,12 @@ namespace StrategyRunner
             {
                 if (quantity < 0)
                 {
-                    int orderId = SellQuoted(-quantity, HedgeKind.OUTRIGHT);
+                    int orderId = SellQuoted(-quantity);
                     return orderId;
                 }
                 else if (quantity > 0)
                 {
-                    int orderId = BuyQuoted(quantity, HedgeKind.OUTRIGHT);
+                    int orderId = BuyQuoted(quantity);
                     return orderId;
                 }
             }
@@ -904,12 +832,12 @@ namespace StrategyRunner
             {
                 if (quantity < 0)
                 {
-                    int orderId = SellQuotedFar(-quantity, HedgeKind.OUTRIGHT);
+                    int orderId = SellQuotedFar(-quantity);
                     return orderId;
                 }
                 else if (quantity > 0)
                 {
-                    int orderId = BuyQuotedFar(quantity, HedgeKind.OUTRIGHT);
+                    int orderId = BuyQuotedFar(quantity);
                     return orderId;
                 }
             }
@@ -918,12 +846,12 @@ namespace StrategyRunner
             {
                 if (quantity < 0)
                 {
-                    int orderId = SellLean(-quantity, HedgeKind.OUTRIGHT);
+                    int orderId = SellLean(-quantity);
                     return orderId;
                 }
                 else if (quantity > 0)
                 {
-                    int orderId = BuyLean(quantity, HedgeKind.OUTRIGHT);
+                    int orderId = BuyLean(quantity);
                     return orderId;
                 }
             }

@@ -26,11 +26,11 @@ namespace Config
                 api.Log("AfterLoad");
                 width = Double.Parse(doc.DocumentElement.SelectSingleNode("/strategyRunner/width").InnerText);
                 size = Int32.Parse(doc.DocumentElement.SelectSingleNode("/strategyRunner/size").InnerText);
-                leanInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/lean").InnerText;
-                quoteInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/quoteNear").InnerText;
+                leanInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/leanInstrument").InnerText;
+                quoteInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/quoteInstrument").InnerText;
 
                 if (doc.DocumentElement.ChildNodes.Count > 4)
-                    quoteFarInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/quoteFar").InnerText;
+                    quoteFarInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/farInstrument").InnerText;
 
                 if (doc.DocumentElement.ChildNodes.Count > 5)
                     icsInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/ics").InnerText;
@@ -70,7 +70,6 @@ namespace StrategyRunner
         VI icsInstrument;
 
         VIT quoteInstrumentT;
-        VIT quoteFarInstrumentT;
 
         KGOrder buy;
         KGOrder sell;
@@ -85,6 +84,8 @@ namespace StrategyRunner
         
         public Hedging hedging;
         BaseSpreads baseSpreads;
+
+        Throttler.Throttler throttler;
 
         public Quoter(API api, string configFile)
         {
@@ -153,7 +154,6 @@ namespace StrategyRunner
                     int quoteFarVenue = quoteFarIndex / numInstrumentsInVenue;
                     int quoteFarIndexGlobal = quoteFarIndex % numInstrumentsInVenue;
                     quoteFarInstrument = new VI(quoteFarVenue, quoteFarIndexGlobal);
-                    quoteFarInstrumentT = new VIT(quoteFarVenue, quoteFarIndexGlobal, 0, 0);
                     instruments.Add(quoteFarInstrument);
                 }
 
@@ -173,6 +173,9 @@ namespace StrategyRunner
                 orders = new Orders(this);
                 hedging = new Hedging(this);
                 baseSpreads = new BaseSpreads(this);
+
+                TimeSpan t = new TimeSpan(0, 0, 0, 0, P.quoteThrottleSeconds * 1000);
+                throttler = new Throttler.Throttler(P.quoteThrottleVolume, t);
 
                 API.Log("-->Start strategy:");
                 API.StartStrategy(ref stgID, strategyOrders, instruments, 0);
@@ -574,45 +577,6 @@ namespace StrategyRunner
                 {
                     orders.SendOrder(sell, quoteIndex, Side.SELL, quoteAsk, config.size, "MM");
                 }
-
-                if (quoteFarIndex != -1)
-                {
-                    bool quoteFar = true;
-
-                    var (quoteFarBid, quoteFarAsk) = GetBidAsk(quoteTheo, tickSize, (config.width / 2.0), quoteFarIndex);
-                    var (maxFarBid, minFarAsk) = getMinimumLonelinessConstrainedBidAsk(quoteFarInstrumentT);
-
-                    if (pricesAreEqual(maxFarBid, -11) || pricesAreEqual(minFarAsk, 11111))
-                    {
-                        quoteFar = false;
-                    }
-
-                    if (P.joinFactor > 0)
-                    {
-                        quoteFarBid = Math.Min(quoteFarBid, maxFarBid);
-                        quoteFarAsk = Math.Max(quoteFarAsk, minFarAsk);
-                    }
-
-                    if (quoteFarBid < -10 || quoteFarAsk > 100)
-                    {
-                        quoteFar = false;
-                    }
-
-                    if (quoteFarAsk - quoteFarBid > config.width + 1e-9)
-                    {
-                        quoteFar = false;
-                    }
-
-                    if (!orders.orderInUse(buyFar) && !orders.orderInTransientState(buyFar) && quoteFar)
-                    {
-                        orders.SendOrder(buyFar, quoteFarIndex, Side.BUY, quoteBid, config.size, "MM");
-                    }
-
-                    if (!orders.orderInUse(sellFar) && !orders.orderInTransientState(sellFar) && quoteFar)
-                    {
-                        orders.SendOrder(sellFar, quoteFarIndex, Side.SELL, quoteAsk, config.size, "MM");
-                    }
-                }
             }
             catch (Exception e)
             {
@@ -662,16 +626,9 @@ namespace StrategyRunner
                 baseSpreads.GetPosition();
                 baseSpreads.UpdateBaseSpreadsAveragePrice(amount, deal.price, instrumentIndex);
 
-                if (deal.source == "MM" && (instrumentIndex == quoteIndex || instrumentIndex == quoteFarIndex))
+                if (deal.source == "MM" && instrumentIndex == quoteIndex)
                 {
-                    if (instrumentIndex == quoteIndex)
-                    {
-                        hedging.Hedge(-amount, Source.NEAR);
-                    }
-                    else
-                    {
-                        hedging.Hedge(-amount, Source.FAR);
-                    }
+                    hedging.Hedge(-amount, Source.NEAR);
                 }
             }
             catch (Exception e)
@@ -695,11 +652,9 @@ namespace StrategyRunner
                 return;
             }
 
-            int instrumentIndex = ord.index + API.n * ord.VenueID;
-
             if (!orders.orderInTransientState(ord) && ord.bidSize < 0 && ord.askSize < 0)
             {
-                hedging.OnOrder(ord, instrumentIndex);
+                hedging.OnOrder(ord);
             }
         }
     }
