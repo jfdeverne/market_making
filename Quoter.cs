@@ -15,6 +15,7 @@ namespace Config
         public string quoteInstrument;
         public string quoteFarInstrument;
         public string icsInstrument;
+        public bool asymmetricQuoting = false;
 
         public QuoterConfig(string file, API api)
         {
@@ -34,6 +35,9 @@ namespace Config
 
                 if (doc.DocumentElement.ChildNodes.Count > 5)
                     icsInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/ics").InnerText;
+
+                if (doc.DocumentElement.ChildNodes.Count > 6)
+                    icsInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/asymmetricQuoting").InnerText;
 
                 api.Log(String.Format("config xml={0}", doc.OuterXml));
                 api.Log("<--Config");
@@ -568,14 +572,29 @@ namespace StrategyRunner
                     return;
                 }
 
+                int quoteSizeBid = config.size;
+                int quoteSizeAsk = config.size;
+
+                if (config.asymmetricQuoting)
+                {
+                    if (quoteIndex % 2 == 0)
+                    {
+                        quoteSizeBid = quoteSizeBid * 2 + 1;
+                    }
+                    else
+                    {
+                        quoteSizeAsk = quoteSizeAsk * 2 + 1;
+                    }
+                }
+
                 if (!orders.orderInUse(buy) && !orders.orderInTransientState(buy) && quote)
                 {
-                    orders.SendOrder(buy, quoteIndex, Side.BUY, quoteBid, config.size, "MM");
+                    orders.SendOrder(buy, quoteIndex, Side.BUY, quoteSizeBid, config.size, "MM");
                 }
 
                 if (!orders.orderInUse(sell) && !orders.orderInTransientState(sell) && quote)
                 {
-                    orders.SendOrder(sell, quoteIndex, Side.SELL, quoteAsk, config.size, "MM");
+                    orders.SendOrder(sell, quoteIndex, Side.SELL, quoteSizeAsk, config.size, "MM");
                 }
             }
             catch (Exception e)
