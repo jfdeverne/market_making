@@ -16,6 +16,7 @@ namespace Config
         public string quoteFarInstrument;
         public string icsInstrument;
         public bool asymmetricQuoting = false;
+        public double defaultBaseSpread;
 
         public QuoterConfig(string file, API api)
         {
@@ -37,7 +38,16 @@ namespace Config
                     icsInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/ics").InnerText;
 
                 if (doc.DocumentElement.ChildNodes.Count > 6)
-                    icsInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/asymmetricQuoting").InnerText;
+                {
+                    string asymmetricQuotingString = doc.DocumentElement.SelectSingleNode("/strategyRunner/asymmetricQuoting").InnerText;
+                    if (asymmetricQuotingString == "true")
+                    {
+                        asymmetricQuoting = true;
+                    }
+                }
+
+                if (doc.DocumentElement.ChildNodes.Count > 7)
+                    defaultBaseSpread = Double.Parse(doc.DocumentElement.SelectSingleNode("/strategyRunner/defaultBaseSpread").InnerText);
 
                 api.Log(String.Format("config xml={0}", doc.OuterXml));
                 api.Log("<--Config");
@@ -194,23 +204,8 @@ namespace StrategyRunner
 
         private double GetOffset()
         {
-            switch (stgID)
-            {
-                case 1:
-                    return P.eus1;
-                case 2:
-                    return P.eus2;
-                case 3:
-                    return P.eus3;
-                case 4:
-                    return P.eus4;
-                case 5:
-                    return P.eus5;
-                case 6:
-                    return P.eus6;
-                default:
-                    throw new Exception("offset index out of bounds");
-            }
+            //TODO: to be implemented by Gady
+            return config.defaultBaseSpread;
         }
 
         private static double RoundToNearestTick(double price, double tick)
