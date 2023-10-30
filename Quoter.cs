@@ -188,7 +188,7 @@ namespace StrategyRunner
             }
         }
 
-        private double GetOffset() //this assumes stgID is per expiry, might wanna add some config instead
+        private double GetOffset()
         {
             switch (stgID)
             {

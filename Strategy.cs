@@ -29,7 +29,7 @@ namespace StrategyRunner
 
         public API API;
         public int stgID;
-        public char systemTradingMode;
+        public char systemTradingMode = 'C';
         public Orders orders;
         public bool activeStopOrders;
 
