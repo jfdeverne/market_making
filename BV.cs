@@ -233,24 +233,24 @@ namespace StrategyRunner
             API.SendToRemote(String.Format("CANCEL STG {0}: {1}", stgID, reason), KGConstants.EVENT_ERROR);
         }
 
-        private int SellNear(int n)
+        private int SellNear(int n, string source)
         {
-            return orders.SendOrder(sell, quoteIndex, Side.SELL, bids[quoteIndex].price, n, "BV");
+            return orders.SendOrder(sell, quoteIndex, Side.SELL, bids[quoteIndex].price, n, source);
         }
 
-        private int BuyNear(int n)
+        private int BuyNear(int n, string source)
         {
-            return orders.SendOrder(buy, quoteIndex, Side.BUY, asks[quoteIndex].price, n, "BV");
+            return orders.SendOrder(buy, quoteIndex, Side.BUY, asks[quoteIndex].price, n, source);
         }
 
-        private int SellFar(int n)
+        private int SellFar(int n, string source)
         {
-            return orders.SendOrder(sellFar, quoteFarIndex, Side.SELL, bids[quoteFarIndex].price, n, "BV");
+            return orders.SendOrder(sellFar, quoteFarIndex, Side.SELL, bids[quoteFarIndex].price, n, source);
         }
 
-        private int BuyFar(int n)
+        private int BuyFar(int n, string source)
         {
-            return orders.SendOrder(buyFar, quoteFarIndex, Side.BUY, asks[quoteFarIndex].price, n, "BV");
+            return orders.SendOrder(buyFar, quoteFarIndex, Side.BUY, asks[quoteFarIndex].price, n, source);
         }
 
         private void HedgeLeftovers(HedgeReason reason)
@@ -260,6 +260,8 @@ namespace StrategyRunner
             {
                 return;
             }
+
+            API.CancelAllOrders(stgID);
 
             Log(String.Format("BV: hedging leftovers, volume={0}, reason={1}", volume, reason));
             hedging.Hedge(pendingBuys - pendingSells, Source.NEAR);
@@ -299,12 +301,12 @@ namespace StrategyRunner
 
                 if (direction == Direction.SELL)
                 {
-                    SellNear(volume);
-                    BuyFar(volume);
+                    SellNear(volume, "BV");
+                    BuyFar(volume, "BV");
                 }
                 else
                 {
-                    int orderId = SellNear(volume);
+                    int orderId = SellNear(volume, "BV");
                     pendingTrades[quoteIndex] = volume;
                 }
 
@@ -335,12 +337,12 @@ namespace StrategyRunner
 
                 if (direction == Direction.BUY)
                 {
-                    BuyNear(volume);
-                    SellFar(volume);
+                    BuyNear(volume, "BV");
+                    SellFar(volume, "BV");
                 }
                 else
                 {
-                    int orderId = BuyNear(volume);
+                    int orderId = BuyNear(volume, "BV");
                     pendingTrades[quoteIndex] = -volume;
                 }
 
@@ -400,6 +402,9 @@ namespace StrategyRunner
 
         private void CancelOnPriceMove(int instrumentIndex)
         {
+            //TODO: we can get filled on the order on price move on the exchange it's working even if the price is still the mid of the other exchange
+            //might wanna add some loneliness or improvedcm criterion
+
             if (instrumentIndex == quoteIndex)
             {
                 double mid = (asks[instrumentIndex].price + bids[instrumentIndex].price) / 2.0;
@@ -509,22 +514,22 @@ namespace StrategyRunner
                 {
                     if (volume > 0)
                     {
-                        BuyFar(volume);
+                        BuyFar(volume, "BV");
                     }
                     else if (volume < 0)
                     {
-                        SellFar(-volume);
+                        SellFar(-volume, "BV");
                     }
                 }
                 else if (instrumentIndex == quoteFarIndex)
                 {
                     if (volume > 0)
                     {
-                        BuyNear(volume);
+                        BuyNear(volume, "BV");
                     }
                     else if (volume < 0)
                     {
-                        SellNear(-volume);
+                        SellNear(-volume, "BV");
                     }
                 }
                 pendingTrades.Remove(instrumentIndex);
@@ -539,22 +544,22 @@ namespace StrategyRunner
                 {
                     if (amount < 0)
                     {
-                        BuyFar(-amount);
+                        BuyFar(-amount, "LIMIT_BV");
                     }
                     else if (amount < 0)
                     {
-                        SellFar(amount);
+                        SellFar(amount, "LIMIT_BV");
                     }
                 }
                 else if (instrumentIndex == quoteFarIndex)
                 {
                     if (amount < 0)
                     {
-                        BuyNear(-amount);
+                        BuyNear(-amount, "LIMIT_BV");
                     }
                     else if (amount > 0)
                     {
-                        SellNear(amount);
+                        SellNear(amount, "LIMIT_BV");
                     }
                 }
                 limitOrders.Remove(instrumentIndex);
@@ -571,7 +576,7 @@ namespace StrategyRunner
 
                 holding[instrumentIndex] += amount;
 
-                if (deal.isBuy)
+                if (deal.isBuy && deal.source != "LIMIT_BV")
                 {
                     pendingBuys -= deal.amount;
                 }
@@ -583,6 +588,9 @@ namespace StrategyRunner
                 cashflow += amount * deal.price * -1;
 
                 CheckPending(instrumentIndex);
+
+                if (deal.source != "LIMIT_BV")
+                    return;
 
                 CheckLimitOrders(instrumentIndex, amount);
             }

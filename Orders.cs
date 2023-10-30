@@ -75,7 +75,6 @@ namespace StrategyRunner
         {
             if (orderInTransientState(ord))
             {
-                Log("ERR: CancelOrder failed, order in transient state");
                 return false;
             }
 
