@@ -351,16 +351,6 @@ namespace StrategyRunner
             }
         }
 
-        private double GetVwap(DepthElement bid, DepthElement ask)
-        {
-            if (bid.qty == 0 || ask.qty == 0)
-            {
-                return -11;
-            }
-
-            return (bid.price * ask.qty + ask.price * bid.qty) / (bid.qty + ask.qty);
-        }
-
         private bool pricesAreEqual(double price1, double price2)
         {
             return Math.Abs(price1 - price2) < 1e-5;
@@ -368,19 +358,33 @@ namespace StrategyRunner
 
         private void InsertAtMid(int instrumentIndex)
         {
+            double targetPrice = API.GetBoxTargetPrice(stgID);
+
             if (instrumentIndex == quoteIndex)
             {
                 double mid = (asks[instrumentIndex].price + bids[instrumentIndex].price) / 2.0;
 
                 if (!orders.orderInUse(limitBuyFar) && pricesAreEqual(mid, bids[quoteFarIndex].price))
                 {
-                    int orderId = orders.SendOrder(limitBuyFar, quoteFarIndex, Side.BUY, bids[quoteFarIndex].price, Math.Min(bids[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
-                    limitOrders.Add(instrumentIndex);
+                    //ADD CHECK HERE IF DIRECTION IS ALLOWED:
+                    double BVPrice = bids[quoteFarIndex].price;
+                    double leanICM = API.GetImprovedCM(leanIndex);
+                    if (BVPrice - leanICM < targetPrice - 0.001)
+                    {
+                        int orderId = orders.SendOrder(limitBuyFar, quoteFarIndex, Side.BUY, bids[quoteFarIndex].price, Math.Min(bids[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
+                        limitOrders.Add(instrumentIndex);
+                    }
                 }
                 else if (!orders.orderInUse(limitSellFar) && pricesAreEqual(mid, asks[quoteFarIndex].price))
                 {
-                    int orderId = orders.SendOrder(limitSellFar, quoteFarIndex, Side.SELL, asks[quoteFarIndex].price, Math.Min(asks[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
-                    limitOrders.Add(instrumentIndex);
+                    //ADD CHECK HERE IF DIRECTION IS ALLOWED:
+                    double BVPrice = asks[quoteFarIndex].price;
+                    double leanICM = API.GetImprovedCM(leanIndex);
+                    if (BVPrice - leanICM > targetPrice + 0.001)
+                    {
+                        int orderId = orders.SendOrder(limitSellFar, quoteFarIndex, Side.SELL, asks[quoteFarIndex].price, Math.Min(asks[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
+                        limitOrders.Add(instrumentIndex);
+                    }
                 }
             }
             else if (instrumentIndex == quoteFarIndex)
@@ -389,13 +393,24 @@ namespace StrategyRunner
 
                 if (!orders.orderInUse(limitBuy) && pricesAreEqual(mid, bids[quoteIndex].price))
                 {
-                    int orderId = orders.SendOrder(limitBuy, quoteIndex, Side.BUY, bids[quoteIndex].price, Math.Min(bids[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
-                    limitOrders.Add(instrumentIndex);
+                    double BVPrice = bids[quoteIndex].price;
+                    double leanICM = API.GetImprovedCM(leanIndex);
+                    if (BVPrice - leanICM < targetPrice - 0.001)
+                    {
+                        int orderId = orders.SendOrder(limitBuy, quoteIndex, Side.BUY, bids[quoteIndex].price, Math.Min(bids[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
+                        limitOrders.Add(instrumentIndex);
+                    }
                 }
                 else if (!orders.orderInUse(limitSell) && pricesAreEqual(mid, asks[quoteIndex].price))
                 {
-                    int orderId = orders.SendOrder(limitSell, quoteIndex, Side.SELL, asks[quoteIndex].price, Math.Min(asks[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
-                    limitOrders.Add(instrumentIndex);
+                    double BVPrice = asks[quoteIndex].price;
+                    double leanICM = API.GetImprovedCM(leanIndex);
+                    if (BVPrice - leanICM > targetPrice + 0.001)
+                    {
+
+                        int orderId = orders.SendOrder(limitSell, quoteIndex, Side.SELL, asks[quoteIndex].price, Math.Min(asks[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
+                        limitOrders.Add(instrumentIndex);
+                    }
                 }
             }
         }
@@ -445,8 +460,7 @@ namespace StrategyRunner
 
                 bids[instrumentIndex] = API.GetBid(vi);
                 asks[instrumentIndex] = API.GetAsk(vi);
-                double theo = GetVwap(bids[instrumentIndex], asks[instrumentIndex]);
-                theos[instrumentIndex] = theo; //TODO: temporary, remove once theos in system
+                double theo = theos[instrumentIndex];
 
                 positionValue = (pendingSells - pendingBuys) * theo;
                 pnl = (cashflow + positionValue) * 2500;
@@ -454,6 +468,7 @@ namespace StrategyRunner
                 if (pnl < -P.bvMaxLoss)
                 {
                     HedgeLeftovers(HedgeReason.PNL_DROP);
+                    return;
                 }
 
                 if (!API.PassedTradeStart())
@@ -471,8 +486,7 @@ namespace StrategyRunner
                     TakeCross(Direction.NEUTRAL);
                 }
 
-                if (P.limitBvEnabled) //TODO: if price runs away when the limit order fills and the other leg misses, Hedge() may cause the other leg order to double on pnl drop.
-                                        //this is likely undesirable. Maybe we should cancel all strategy orders when Hedge() is called and account for any executions that may have occured.
+                if (P.limitBvEnabled)
                 {
                     InsertAtMid(instrumentIndex);
                     CancelOnPriceMove(instrumentIndex);

@@ -460,8 +460,7 @@ namespace StrategyRunner
 
                 baseSpreads.ManageBaseSpreads();
 
-                theo = GetVwap(bids[instrumentIndex], asks[instrumentIndex]);
-                theos[instrumentIndex] = theo; //TODO: remove once improvedcms are present in the rec files
+                theo = theos[instrumentIndex];
 
                 bool quote = shouldQuote(vi) && !pricesAreEqual(theo, -11);
 
@@ -601,16 +600,6 @@ namespace StrategyRunner
         public override void OnParamsUpdate()
         {
             baseSpreads.OnUpdatedParams();
-        }
-
-        private double GetVwap(DepthElement bid, DepthElement ask)
-        {
-            if (bid.qty == 0 || ask.qty == 0)
-            {
-                return -11;
-            }
-
-            return (bid.price * ask.qty + ask.price * bid.qty) / (bid.qty + ask.qty);
         }
 
         public override void OnImprovedCM(int index, double CMPrice)

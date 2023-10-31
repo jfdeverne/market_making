@@ -5,6 +5,7 @@ using KGClasses;
 using StrategyLib;
 using System.IO;
 using System.Reflection;
+using Mapack;
 
 namespace Detail
 {
@@ -86,6 +87,20 @@ namespace Throttler
     }
 }
 
+public class Box
+{
+    public int holding;
+    public int[] indices = new int[4];
+    public double ICM;
+    public double targetPrice;
+    public Box(int[] Indices, int Holding = 0)
+    {
+        holding = Holding;
+        for (int i = 0; i < Indices.Length; i++)
+            indices[i] = Indices[i];
+    }
+}
+
 namespace StrategyRunner
 {
     struct VariableInfo
@@ -97,6 +112,23 @@ namespace StrategyRunner
 
     class StrategyRunner
     {
+        int NBoxes;
+        IMatrix V;
+        IMatrix VVTInv;
+        IMatrix VTVVTInv;
+        IMatrix beta;
+        int[] boxIndices;
+        int[] outrightIndices;
+        IMatrix boxTargetPrices; //y
+        IMatrix outrightICMs; //xICM
+        IMatrix outrightTargetPrices; //x = xICM + VTVVTInv*(y-V*xICM)
+
+        IMatrix boxHoldings;
+        List<int> quoteIndices;
+        List<int> quoteFarIndices;
+        List<int> leanIndices;
+        List<Box> boxes;
+
         public static API API;
         [DllImport("Kernel32")]
         public static extern bool SetConsoleCtrlHandler(HandlerRoutine Handler, bool Add);
@@ -333,16 +365,85 @@ namespace StrategyRunner
             string pathBV = Directory.GetCurrentDirectory() + "/bv_config";
             var filesBV = Directory.GetFiles(pathBV, "*.xml", SearchOption.TopDirectoryOnly);
 
+            quoteIndices = new List<int>();
+            quoteFarIndices = new List<int>();
+            leanIndices = new List<int>();
+            boxes = new List<Box>();
+
             foreach (var file in filesQuoter)
             {
                 Strategy s = new Quoter(API, file);
                 strategies[s.stgID] = s;
             }
 
+            int ii = 0;
             foreach (var file in filesBV)
             {
                 Strategy s = new BV(API, file);
                 strategies[s.stgID] = s;
+
+                if (API.GetSecurityNumber(s.quoteIndex, 0).Length > 9) //NOT OUTRIGHT
+                {
+                    quoteIndices.Add(s.quoteIndex);
+                    quoteFarIndices.Add(s.quoteFarIndex);
+                    leanIndices.Add(s.leanIndex);
+                    strategies[s.stgID].linkedBoxIndex = ii; //LINKING THE RELEVANT BOX ENTRY IN THE boxes ARRAYS
+                    ii++;
+                }
+            }
+
+            NBoxes = quoteIndices.Count;
+            //firstOutright = API.GetSecurityIndex(P.firstContract, 0);
+            //firstIndex = API.GetSecurityIndex(P.firstContract + "_DBFLY", 0);
+            boxHoldings = new Matrix(NBoxes, 1);
+            boxIndices = new int[4]; //leg1, leg2 of 1st calendar spread, then leg1 and leg2 of the 2nd cal spread
+            outrightIndices = new int[2 * (NBoxes + 1)];
+            V = new Matrix(NBoxes, 2 * (NBoxes + 1));
+            beta = new Matrix(2 * (NBoxes + 1), 1);
+            boxTargetPrices = new Matrix(NBoxes, 1);
+            outrightICMs = new Matrix(2 * (NBoxes + 1), 1);
+            outrightTargetPrices = new Matrix(2 * (NBoxes + 1), 1);
+
+            for (int i = 0; i < NBoxes; i++)
+            {
+                V[i, i] = 1;
+                V[i, i + 1] = -1;
+                V[i, i + NBoxes + 1] = -1;
+                V[i, i + NBoxes + 2] = 1;
+                Combo combos = API.GetCombos(quoteIndices[i]);
+                Combo leanCombos = API.GetCombos(leanIndices[i]);
+                boxIndices[0] = (combos.spreadList[0].buyLeg) % API.n;
+                boxIndices[1] = (combos.spreadList[0].sellLeg) % API.n;
+                boxIndices[2] = (leanCombos.spreadList[0].buyLeg) % API.n;
+                boxIndices[3] = (leanCombos.spreadList[0].sellLeg) % API.n;
+                boxes.Add(new Box(boxIndices));
+                //WE PRESUME THAT i's sellLeg is (i+1)'s buyLeg:
+                if (i == 0)
+                {
+                    outrightIndices[0] = combos.spreadList[0].buyLeg;
+                    outrightIndices[NBoxes + 1] = leanCombos.spreadList[0].buyLeg;
+                }
+                outrightIndices[i + 1] = combos.spreadList[0].sellLeg;
+                outrightIndices[i + 1 + NBoxes + 1] = leanCombos.spreadList[0].sellLeg;
+            }
+
+            if (1 == 1)
+            {
+                for (int j = 0; j < NBoxes; j++)
+                {
+                    Combo combos = API.GetCombos(quoteIndices[j]);
+                    Combo farCombos = API.GetCombos(quoteFarIndices[j]);
+                    Combo leanCombos = API.GetCombos(leanIndices[j]);
+                    beta[j, 0] = API.GetOutrightPos(combos.spreadList[0].buyLeg) + API.GetOutrightPos(farCombos.spreadList[0].buyLeg);
+                    beta[j + 1, 0] = API.GetOutrightPos(combos.spreadList[0].sellLeg) + API.GetOutrightPos(farCombos.spreadList[0].sellLeg);
+                    beta[j + NBoxes + 1, 0] = API.GetOutrightPos(leanCombos.spreadList[0].buyLeg);
+                    beta[j + NBoxes + 2, 0] = API.GetOutrightPos(leanCombos.spreadList[0].sellLeg);
+                }
+                VVTInv = (V.Multiply(V.Transpose())).Inverse;
+                boxHoldings = VVTInv.Multiply(V.Multiply(beta));
+                VTVVTInv = V.Transpose().Multiply(VVTInv);
+                for (int j = 0; j < NBoxes; j++)
+                    boxes[j].holding = (int)boxHoldings[j, 0];
             }
         }
 
@@ -385,9 +486,43 @@ namespace StrategyRunner
 
         private void API_OnProcessMD(VIT vi, int stgID)
         {
-            if (strategies.ContainsKey(stgID))
+            try
             {
-                strategies[stgID].OnProcessMD(vi);
+                if (strategies[stgID].linkedBoxIndex > -1)
+                {
+                    boxes[strategies[stgID].linkedBoxIndex].targetPrice = API.GetBoxTargetPrice(stgID);
+                    strategies[stgID].boxTargetPrice = boxes[strategies[stgID].linkedBoxIndex].targetPrice;
+                }
+                else
+                {
+                    for (int i = 0; i < NBoxes; i++)
+                    {
+                        boxes[i].ICM = API.GetImprovedCM(boxIndices[0]) - API.GetImprovedCM(boxIndices[1]) - (API.GetImprovedCM(boxIndices[2]) - API.GetImprovedCM(boxIndices[3]));
+                        boxTargetPrices[i, 0] = boxes[i].targetPrice;
+                    }
+                    for (int i = 0; i < outrightIndices.Length; i++)
+                        outrightICMs[i, 0] = API.GetImprovedCM(outrightIndices[i]);
+
+                    outrightTargetPrices = outrightICMs.Addition(VTVVTInv.Multiply(boxTargetPrices.Subtraction(V.Multiply(outrightICMs))));
+                    if (strategies.ContainsKey(stgID))
+                    {
+                        double targetBoxPrice = 0;
+                        for (int i = 0; i < outrightIndices.Length; i++)
+                        {
+                            if (strategies[stgID].quoteIndex == outrightIndices[i])
+                                targetBoxPrice += outrightTargetPrices[i, 0];
+                            else if (strategies[stgID].leanIndex == outrightIndices[i])
+                                targetBoxPrice -= outrightTargetPrices[i, 0];
+                        }
+                        strategies[stgID].boxTargetPrice = targetBoxPrice;
+                    }
+                }
+                if (strategies.ContainsKey(stgID))
+                    strategies[stgID].OnProcessMD(vi);
+            }
+            catch (Exception)
+            {
+                API.SendToRemote("API_OnProcessMD:", KGConstants.EVENT_ERROR);
             }
         }
 

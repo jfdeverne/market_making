@@ -19,6 +19,7 @@ namespace StrategyRunner
         public int quoteIndex;
         public int quoteFarIndex;
         public int leanIndex;
+        public double boxTargetPrice; //"BOX" REFERS TO (quoteIndex - leanIndex)
 
         public int[] holding;
         public DepthElement[] bids;
@@ -33,5 +34,6 @@ namespace StrategyRunner
         public Orders orders;
         public bool activeStopOrders;
 
+        public int linkedBoxIndex = -1;
     }
 }
