@@ -15,6 +15,8 @@ namespace Detail
     }
 }
 
+//TODO: replace current logic with GetDirection
+
 namespace StrategyRunner
 {
 	public class BaseSpreads

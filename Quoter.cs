@@ -5,7 +5,7 @@ using System.Collections.Generic;
 using KGClasses;
 using System.Xml;
 
-namespace Config
+namespace StrategyRunner
 {
     public class QuoterConfig
     {
@@ -17,6 +17,7 @@ namespace Config
         public string icsInstrument;
         public bool asymmetricQuoting = false;
         public double defaultBaseSpread;
+        public int limitPlusSize = 200;
 
         public QuoterConfig(string file, API api)
         {
@@ -30,6 +31,7 @@ namespace Config
                 size = Int32.Parse(doc.DocumentElement.SelectSingleNode("/strategyRunner/size").InnerText);
                 leanInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/leanInstrument").InnerText;
                 quoteInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/quoteInstrument").InnerText;
+                limitPlusSize = Int32.Parse(doc.DocumentElement.SelectSingleNode("/strategyRunner/limitPlusSize").InnerText);
 
                 if (doc.DocumentElement.ChildNodes.Count > 4)
                     quoteFarInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/farInstrument").InnerText;
@@ -58,15 +60,10 @@ namespace Config
             }
         }
     }
-}
 
-namespace StrategyRunner
-{
     public class Quoter : Strategy
     {
-        public Config.QuoterConfig config;
-
-        double theo;
+        public QuoterConfig config;
 
         double maxBidSize;
         double maxAskSize;
@@ -114,17 +111,17 @@ namespace StrategyRunner
                 holding = new int[numAllInstruments];
                 bids = new DepthElement[numAllInstruments];
                 asks = new DepthElement[numAllInstruments];
-                theos = new double[numAllInstruments];
 
                 for (int i = 0; i < numAllInstruments; i++)
                 {
                     holding[i] = 0;
                     bids[i] = new DepthElement(-11, 0);
                     asks[i] = new DepthElement(11111, 0);
-                    theos[i] = -11;
                 }
 
-                config = new Config.QuoterConfig(configFile, api);
+                config = new QuoterConfig(configFile, api);
+
+                limitPlusSize = config.limitPlusSize;
 
                 instruments = new List<VI>();
 
@@ -204,8 +201,8 @@ namespace StrategyRunner
 
         private double GetOffset()
         {
-            //TODO: to be implemented by Gady
-            return config.defaultBaseSpread;
+            return boxTargetPrice;
+            //return config.defaultBaseSpread; TODO: when do we return this?
         }
 
         private static double RoundToNearestTick(double price, double tick)
@@ -222,6 +219,7 @@ namespace StrategyRunner
             double bid = RoundToNearestTick(theoreticalPrice - width, tickSize);
             double ask = RoundToNearestTick(theoreticalPrice + width, tickSize);
 
+            //TODO: replace with the new GetDirection() logic (need to add magnitude)
             if (holding[index] > 0)
             {
                 bid -= tickSize;
@@ -460,7 +458,7 @@ namespace StrategyRunner
 
                 baseSpreads.ManageBaseSpreads();
 
-                theo = theos[instrumentIndex];
+                double theo = API.GetImprovedCM(instrumentIndex);
 
                 bool quote = shouldQuote(vi) && !pricesAreEqual(theo, -11);
 
@@ -600,16 +598,6 @@ namespace StrategyRunner
         public override void OnParamsUpdate()
         {
             baseSpreads.OnUpdatedParams();
-        }
-
-        public override void OnImprovedCM(int index, double CMPrice)
-        {
-            if (index != leanIndex)
-            {
-                return;
-            }
-
-            theos[index] = CMPrice;
         }
 
         public override void OnDeal(KGDeal deal)

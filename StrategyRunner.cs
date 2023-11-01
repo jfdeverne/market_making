@@ -167,7 +167,6 @@ namespace StrategyRunner
             API.OnOrder += API_OnOrder;
             API.OnStatusChanged += API_OnStatusChanged;
             API.OnFlush += API_OnFlush;
-            API.OnImprovedCM += API_OnImprovedCM;
             API.OnConnect += API_OnConnect;
             API.OnSystemTradingMode += API_OnSystemTradingMode;
             API.OnPurgedOrder += API_OnPurgedOrder;
@@ -501,7 +500,9 @@ namespace StrategyRunner
                         boxTargetPrices[i, 0] = boxes[i].targetPrice;
                     }
                     for (int i = 0; i < outrightIndices.Length; i++)
+                    {
                         outrightICMs[i, 0] = API.GetImprovedCM(outrightIndices[i]);
+                    }
 
                     outrightTargetPrices = outrightICMs.Addition(VTVVTInv.Multiply(boxTargetPrices.Subtraction(V.Multiply(outrightICMs))));
                     if (strategies.ContainsKey(stgID))
@@ -523,14 +524,6 @@ namespace StrategyRunner
             catch (Exception)
             {
                 API.SendToRemote("API_OnProcessMD:", KGConstants.EVENT_ERROR);
-            }
-        }
-
-        private void API_OnImprovedCM(int index, double CMPrice)
-        {
-            foreach (KeyValuePair<int, Strategy> kv in strategies)
-            {
-                kv.Value.OnImprovedCM(index, CMPrice);
             }
         }
 

@@ -132,46 +132,14 @@ namespace StrategyRunner
 
         private double GetOffset()
         {
-            switch (mStrategy.stgID)
-            {
-                case 1:
-                    return P.eus1;
-                case 2:
-                    return P.eus2;
-                case 3:
-                    return P.eus3;
-                case 4:
-                    return P.eus4;
-                case 5:
-                    return P.eus5;
-                case 6:
-                    return P.eus6;
-                default:
-                    throw new Exception("offset index out of bounds");
-            }
-        }
-
-        private int GetLimitplusSize(int volume)
-        {
-            switch (mStrategy.stgID) //this assumes stgID is per expiry, and returns the usual euribor limitplus sizes
-            {
-                case 1:
-                    return 2000 + volume * 3;
-                case 2:
-                    return 1000 + volume * 3;
-                case 3:
-                    return 500 + volume * 3;
-                case 7:
-                    return 1000 + volume * 3;
-                case 8:
-                    return 500 + volume * 3;
-                default:
-                    return 200 + volume * 3;
-            }
+            return mStrategy.boxTargetPrice;
+            //return mStrategy.config.defaultBaseSpread; TODO: when do we return this?
         }
 
         private int GetHedgeInstrument(int quantity)
         {
+            //TODO: replace decision to hedge with quote or lean with the new GetDirection() function
+
             int hedgeIndex = -1;
             double bestOffer = double.MaxValue;
             double bestBid = double.MinValue;
@@ -279,27 +247,27 @@ namespace StrategyRunner
                 }
                 else if (stopBuyOrder1Info.inUse && stopBuyOrder2Info.inUse && stopBuyOrder1Info.instrument == instrument)
                 {
-                    Log("incrementing stopBuyOrder1 volume");
                     stopBuyOrder1Info.volume += volume;
                     stopBuyOrder1Info.parent2OrderId = parentOrderId;
+                    Log(String.Format("incrementing stopBuyOrder1 volume to {0}", stopBuyOrder1Info.volume));
                 }
                 else if (stopBuyOrder1Info.inUse && stopBuyOrder1Info.instrument == instrument)
                 {
-                    Log("incrementing stopBuyOrder1 volume");
                     stopBuyOrder1Info.volume += volume;
                     stopBuyOrder1Info.parent2OrderId = parentOrderId;
+                    Log(String.Format("incrementing stopBuyOrder1 volume to {0}", stopBuyOrder1Info.volume));
                 }
                 else if (stopBuyOrder1Info.inUse && stopBuyOrder2Info.inUse && stopBuyOrder2Info.instrument == instrument)
                 {
-                    Log("incrementing stopBuyOrder2 volume");
                     stopBuyOrder2Info.volume += volume;
                     stopBuyOrder2Info.parent2OrderId = parentOrderId;
+                    Log(String.Format("incrementing stopBuyOrder2 volume to {0}", stopBuyOrder2Info.volume));
                 }
                 else if (stopBuyOrder2Info.inUse && stopBuyOrder2Info.instrument == instrument)
                 {
-                    Log("incrementing stopBuyOrder2 volume");
                     stopBuyOrder2Info.volume += volume;
                     stopBuyOrder2Info.parent2OrderId = parentOrderId;
+                    Log(String.Format("incrementing stopBuyOrder2 volume to {0}", stopBuyOrder2Info.volume));
                 }
                 else if (stopBuyOrder1Info.inUse)
                 {
@@ -335,27 +303,27 @@ namespace StrategyRunner
                 }
                 else if (stopSellOrder1Info.inUse && stopSellOrder2Info.inUse && stopSellOrder1Info.instrument == instrument)
                 {
-                    Log("incrementing stopSellOrder1 volume");
                     stopSellOrder1Info.volume += volume;
                     stopSellOrder1Info.parent2OrderId = parentOrderId;
+                    Log(String.Format("incrementing stopSellOrder1 volume to {0}", stopSellOrder1Info.volume));
                 }
                 else if (stopSellOrder1Info.inUse && stopSellOrder1Info.instrument == instrument)
                 {
-                    Log("incrementing stopSellOrder1 volume");
                     stopSellOrder1Info.volume += volume;
                     stopSellOrder1Info.parent2OrderId = parentOrderId;
+                    Log(String.Format("incrementing stopSellOrder1 volume to {0}", stopSellOrder1Info.volume));
                 }
                 else if (stopSellOrder1Info.inUse && stopSellOrder2Info.inUse && stopSellOrder2Info.instrument == instrument)
                 {
-                    Log("incrementing stopSellOrder2 volume");
                     stopSellOrder2Info.volume += volume;
                     stopSellOrder2Info.parent2OrderId = parentOrderId;
+                    Log(String.Format("incrementing stopSellOrder2 volume to {0}", stopSellOrder2Info.volume));
                 }
                 else if (stopSellOrder2Info.inUse && stopSellOrder2Info.instrument == instrument)
                 {
-                    Log("incrementing stopSellOrder2 volume");
                     stopSellOrder2Info.volume += volume;
                     stopSellOrder2Info.parent2OrderId = parentOrderId;
+                    Log(String.Format("incrementing stopSellOrder2 volume to {0}", stopSellOrder2Info.volume));
                 }
                 else if (stopSellOrder1Info.inUse)
                 {
@@ -391,7 +359,7 @@ namespace StrategyRunner
             int index = info.leanInstrument != -1 ? info.leanInstrument : info.instrument;
             bool volumeAtStopPriceLow = (mStrategy.asks[index].price == info.stopPrice && mStrategy.asks[index].qty < info.stopVolume);
             bool marketRanAway = mStrategy.asks[index].price > info.stopPrice;
-            bool theoRanAway = mStrategy.theos[index] > info.stopPrice + 0.001;
+            bool theoRanAway = mStrategy.API.GetImprovedCM(index) > info.stopPrice + 0.001;
             return
                 (volumeAtStopPriceLow || marketRanAway)
                 && theoRanAway;
@@ -402,7 +370,7 @@ namespace StrategyRunner
             int index = info.leanInstrument != -1 ? info.leanInstrument : info.instrument;
             bool volumeAtStopPriceLow = (mStrategy.bids[index].price == info.stopPrice && mStrategy.bids[index].qty < info.stopVolume);
             bool marketRanAway = mStrategy.bids[index].price < info.stopPrice;
-            bool theoRanAway = mStrategy.theos[index] < info.stopPrice - 0.001;
+            bool theoRanAway = mStrategy.API.GetImprovedCM(index) < info.stopPrice - 0.001;
             return
                 (volumeAtStopPriceLow || marketRanAway)
                 && theoRanAway;
@@ -627,7 +595,7 @@ namespace StrategyRunner
             }
 
             ManagePendingOrders(order.internalOrderNumber, n);
-            PostStopOrder(mStrategy.leanIndex, mStrategy.leanIndex, mStrategy.bids[mStrategy.leanIndex].price, mStrategy.asks[mStrategy.leanIndex].price, n, GetLimitplusSize(n) + 200, Side.BUY, order.internalOrderNumber);
+            PostStopOrder(mStrategy.leanIndex, mStrategy.leanIndex, mStrategy.bids[mStrategy.leanIndex].price, mStrategy.asks[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.BUY, order.internalOrderNumber);
         }
 
         private void LimitPlusSellLean(int n)
@@ -644,7 +612,7 @@ namespace StrategyRunner
             }
 
             ManagePendingOrders(order.internalOrderNumber, -n);
-            PostStopOrder(mStrategy.leanIndex, mStrategy.leanIndex, mStrategy.asks[mStrategy.leanIndex].price, mStrategy.bids[mStrategy.leanIndex].price, n, GetLimitplusSize(n) + 200, Side.SELL, order.internalOrderNumber);
+            PostStopOrder(mStrategy.leanIndex, mStrategy.leanIndex, mStrategy.asks[mStrategy.leanIndex].price, mStrategy.bids[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.SELL, order.internalOrderNumber);
         }
 
         private void LimitPlusBuyQuoted(int n)
@@ -661,7 +629,7 @@ namespace StrategyRunner
             }
 
             ManagePendingOrders(order.internalOrderNumber, n);
-            PostStopOrder(mStrategy.quoteIndex, mStrategy.leanIndex, mStrategy.bids[mStrategy.quoteIndex].price, mStrategy.asks[mStrategy.leanIndex].price, n, GetLimitplusSize(n) + 200, Side.BUY, order.internalOrderNumber);
+            PostStopOrder(mStrategy.quoteIndex, mStrategy.leanIndex, mStrategy.bids[mStrategy.quoteIndex].price, mStrategy.asks[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.BUY, order.internalOrderNumber);
         }
 
         private void LimitPlusBuyQuotedFar(int n)
@@ -678,7 +646,7 @@ namespace StrategyRunner
             }
 
             ManagePendingOrders(order.internalOrderNumber, n);
-            PostStopOrder(mStrategy.quoteFarIndex, mStrategy.leanIndex, mStrategy.bids[mStrategy.quoteFarIndex].price, mStrategy.asks[mStrategy.leanIndex].price, n, GetLimitplusSize(n) + 200, Side.BUY, order.internalOrderNumber);
+            PostStopOrder(mStrategy.quoteFarIndex, mStrategy.leanIndex, mStrategy.bids[mStrategy.quoteFarIndex].price, mStrategy.asks[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.BUY, order.internalOrderNumber);
         }
 
         private void LimitPlusSellQuoted(int n)
@@ -695,7 +663,7 @@ namespace StrategyRunner
             }
 
             ManagePendingOrders(order.internalOrderNumber, -n);
-            PostStopOrder(mStrategy.quoteIndex, mStrategy.leanIndex, mStrategy.asks[mStrategy.quoteIndex].price, mStrategy.bids[mStrategy.leanIndex].price, n, GetLimitplusSize(n) + 200, Side.SELL, order.internalOrderNumber);
+            PostStopOrder(mStrategy.quoteIndex, mStrategy.leanIndex, mStrategy.asks[mStrategy.quoteIndex].price, mStrategy.bids[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.SELL, order.internalOrderNumber);
         }
 
         private void LimitPlusSellQuotedFar(int n)
@@ -711,7 +679,7 @@ namespace StrategyRunner
 
             int orderId = mOrders.SendOrder(order, mStrategy.quoteFarIndex, Side.SELL, mStrategy.asks[mStrategy.quoteFarIndex].price, n, "HEDGE");
             ManagePendingOrders(order.internalOrderNumber, -n);
-            PostStopOrder(mStrategy.quoteFarIndex, mStrategy.leanIndex, mStrategy.asks[mStrategy.quoteFarIndex].price, mStrategy.bids[mStrategy.leanIndex].price, n, GetLimitplusSize(n) + 200, Side.SELL, order.internalOrderNumber);
+            PostStopOrder(mStrategy.quoteFarIndex, mStrategy.leanIndex, mStrategy.asks[mStrategy.quoteFarIndex].price, mStrategy.bids[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.SELL, order.internalOrderNumber);
         }
 
         private int BuyLean(int n)

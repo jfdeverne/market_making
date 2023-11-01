@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using KGClasses;
+using StrategyLib;
 
 namespace StrategyRunner
 {
@@ -67,6 +68,8 @@ namespace StrategyRunner
             mStrategy.API.PopulateOrder(ord, instrument, isBuy, price, amount, false);
             ord.source = source;
             mStrategy.API.PostOrder(ord, mStrategy.stgID);
+
+            mStrategy.API.Log(String.Format("SendOrder instrument={0} side={1} price={2} amount={3} source={4} id={5}", instrument, side, price, amount, source, ord.internalOrderNumber));
 
             return ord.internalOrderNumber;
         }

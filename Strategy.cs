@@ -12,7 +12,6 @@ namespace StrategyRunner
         public abstract void OnFlush();
         public abstract void OnOrder(KGOrder ord);
         public abstract void OnProcessMD(VIT vi);
-        public abstract void OnImprovedCM(int index, double CMPrice);
         public abstract void OnDeal(KGDeal deal);
         public abstract void OnParamsUpdate();
 
@@ -24,7 +23,6 @@ namespace StrategyRunner
         public int[] holding;
         public DepthElement[] bids;
         public DepthElement[] asks;
-        public double[] theos;
 
         public List<KGOrder> strategyOrders;
 
@@ -35,5 +33,7 @@ namespace StrategyRunner
         public bool activeStopOrders;
 
         public int linkedBoxIndex = -1;
+
+        public int limitPlusSize;
     }
 }
