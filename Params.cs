@@ -18,6 +18,7 @@ namespace StrategyRunner
         public static int maxOutrights = 0;
 
         public static double joinFactor = 0;
+        public static double joinFactorAllVenues = 0;
 
         public static int desiredEus1 = 0;
         public static int desiredEus2 = 0;
@@ -44,6 +45,7 @@ namespace StrategyRunner
 
         public static double bvTimeoutSeconds = 0;
         public static double bvMaxLoss = 0;
+        public static int bvMaxOutstandingOutrights = 0;
 
         public static double spreaderTargetPrice = 0;
         public static int spreaderStepSize = 10;

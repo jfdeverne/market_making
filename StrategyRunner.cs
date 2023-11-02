@@ -66,7 +66,6 @@ namespace Throttler
 
             if (mCurrentVolume + volume > mMaxVolume)
             {
-                Console.WriteLine("trade blocked by throttler");
                 return false;
             }
 

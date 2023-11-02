@@ -30,6 +30,7 @@ namespace BVConfig
         public string farInstrument;
         public string leanInstrument;
         public int limitPlusSize;
+        public double defaultBaseSpread;
 
         public BVConfig(string file, API api)
         {
@@ -43,6 +44,8 @@ namespace BVConfig
                 farInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/farInstrument").InnerText;
                 leanInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/leanInstrument").InnerText;
                 limitPlusSize = Int32.Parse(doc.DocumentElement.SelectSingleNode("/strategyRunner/limitPlusSize").InnerText);
+                defaultBaseSpread = Double.Parse(doc.DocumentElement.SelectSingleNode("/strategyRunner/defaultBaseSpread").InnerText);
+                    
 
                 api.Log(String.Format("config xml={0}", doc.OuterXml));
                 api.Log("<--Config");
@@ -66,8 +69,7 @@ namespace StrategyRunner
 
         VI nearInstrument;
         VI farInstrument;
-        VIT nearInstrumentT;
-        VIT farInstrumentT;
+        VI leanInstrument;
 
         KGOrder buy;
         KGOrder sell;
@@ -89,8 +91,7 @@ namespace StrategyRunner
         int pendingBuys = 0;
         int pendingSells = 0;
 
-        Timer timeout; //todo: stop on deal when other leg is filled
-        //todo: hedge limitbv too
+        Timer timeout;
 
         Hedging hedging;
 
@@ -126,6 +127,7 @@ namespace StrategyRunner
                 config = new BVConfig.BVConfig(configFile, api);
 
                 limitPlusSize = config.limitPlusSize;
+                boxTargetPrice = config.defaultBaseSpread;
 
                 instruments = new List<VI>();
                 pendingOrders = new Dictionary<int, int>();
@@ -140,13 +142,16 @@ namespace StrategyRunner
                 int farVenue = quoteFarIndex / numInstrumentsInVenue;
                 int farIndexGlobal = quoteFarIndex % numInstrumentsInVenue;
 
+                int leanVenue = leanIndex / numInstrumentsInVenue;
+                int leanIndexGlobal = leanIndex % numInstrumentsInVenue;
+
                 nearInstrument = new VI(nearVenue, nearIndexGlobal);
                 farInstrument = new VI(farVenue, farIndexGlobal);
-                nearInstrumentT = new VIT(nearVenue, nearIndexGlobal, 0, 0);
-                farInstrumentT = new VIT(farVenue, farIndexGlobal, 0, 0);
+                leanInstrument = new VI(leanVenue, leanIndexGlobal);
 
                 instruments.Add(nearInstrument);
                 instruments.Add(farInstrument);
+                instruments.Add(leanInstrument);
 
                 strategyOrders = new List<KGOrder>();
 
@@ -235,6 +240,16 @@ namespace StrategyRunner
             API.SendToRemote(String.Format("CANCEL STG {0}: {1}", stgID, reason), KGConstants.EVENT_ERROR);
         }
 
+        private int GetNetPosition()
+        {
+            return holding[quoteIndex] + holding[quoteFarIndex] + holding[leanIndex];
+        }
+
+        private int GetQuotedPosition()
+        {
+            return holding[quoteIndex] + holding[quoteFarIndex];
+        }
+
         private int SellNear(int n, string source)
         {
             int orderId = orders.SendOrder(sell, quoteIndex, Side.SELL, bids[quoteIndex].price, n, source);
@@ -263,6 +278,22 @@ namespace StrategyRunner
             return orderId;
         }
 
+        private bool isBuyPreferred(double BVPrice)
+        {
+            if (BVPrice - API.GetImprovedCM(leanIndex) < boxTargetPrice - P.creditOffset)
+                return true;
+            else
+                return false;
+        }
+
+        private bool isSellPreferred(double BVPrice)
+        {
+            if (BVPrice - API.GetImprovedCM(leanIndex) > boxTargetPrice + P.creditOffset)
+                return true;
+            else
+                return false;
+        }
+
         private void HedgeLeftovers(HedgeReason reason)
         {
             int volume = pendingBuys - pendingSells;
@@ -289,14 +320,20 @@ namespace StrategyRunner
             pendingTrades.Clear();
         }
 
-        private void TakeCross(Direction direction)
+        private void TakeCross()
         {
             if (bids[quoteIndex].price == asks[quoteFarIndex].price)
             {
+                if (GetQuotedPosition() < -P.bvMaxOutstandingOutrights)
+                    return;
+
+                if (holding[leanIndex] > P.maxOutrights)
+                    return;
+
                 timeout.Stop();
                 timeout.Start();
 
-                int availableVolume = Math.Min(API.GetBid(nearInstrumentT).qty, API.GetAsk(farInstrumentT).qty);
+                int availableVolume = Math.Min(API.GetBid(nearInstrument).qty, API.GetAsk(farInstrument).qty);
                 int volume = Math.Min(availableVolume, P.maxCrossVolume);
 
                 if (volume == 0)
@@ -312,7 +349,7 @@ namespace StrategyRunner
                 if (!bvThrottler.addTrade(volume))
                     return;
 
-                if (direction == Direction.SELL)
+                if (isSellPreferred(bids[quoteIndex].price))
                 {
                     SellNear(volume, "BV");
                     BuyFar(volume, "BV");
@@ -329,10 +366,16 @@ namespace StrategyRunner
 
             if (asks[quoteIndex].price == bids[quoteFarIndex].price)
             {
+                if (GetQuotedPosition() > P.bvMaxOutstandingOutrights)
+                    return;
+
+                if (holding[leanIndex] < -P.maxOutrights)
+                    return;
+
                 timeout.Stop();
                 timeout.Start();
 
-                int availableVolume = Math.Min(API.GetAsk(nearInstrumentT).qty, API.GetBid(farInstrumentT).qty);
+                int availableVolume = Math.Min(API.GetAsk(nearInstrument).qty, API.GetBid(farInstrument).qty);
                 int volume = Math.Min(availableVolume, P.maxCrossVolume);
 
                 if (volume == 0)
@@ -340,7 +383,7 @@ namespace StrategyRunner
                     return;
                 }
 
-                if (Math.Abs(holding[quoteFarIndex] - volume) > P.maxOutrights || Math.Abs(holding[quoteIndex] + volume) > P.maxOutrights)
+                if (Math.Abs(holding[quoteFarIndex] + volume) > P.maxOutrights || Math.Abs(holding[quoteIndex] - volume) > P.maxOutrights)
                 {
                     return;
                 }
@@ -348,7 +391,7 @@ namespace StrategyRunner
                 if (!bvThrottler.addTrade(volume))
                     return;
 
-                if (direction == Direction.BUY)
+                if (isBuyPreferred(asks[quoteIndex].price))
                 {
                     BuyNear(volume, "BV");
                     SellFar(volume, "BV");
@@ -369,40 +412,30 @@ namespace StrategyRunner
             return Math.Abs(price1 - price2) < 1e-5;
         }
 
-        private Direction GetDirection()
-        {
-            double spreadPrice = boxTargetPrice;
-
-            double quotePrice = bids[quoteFarIndex].price;
-
-            double leanPrice = API.GetImprovedCM(leanIndex);
-
-            if (quotePrice - leanPrice < spreadPrice - P.creditOffset)
-            {
-                return Direction.BUY;
-            }
-            else if (quotePrice - leanPrice > spreadPrice + P.creditOffset)
-            {
-                return Direction.SELL;
-            }
-            else
-            {
-                return Direction.NEUTRAL;
-            }
-        }
-
         private void InsertAtMid(int instrumentIndex)
         {
             if (instrumentIndex == quoteIndex)
             {
                 double mid = (asks[instrumentIndex].price + bids[instrumentIndex].price) / 2.0;
 
-                if (!orders.orderInUse(limitBuyFar) && pricesAreEqual(mid, bids[quoteFarIndex].price) && GetDirection() == Direction.BUY)
+                if (!orders.orderInUse(limitBuyFar) && pricesAreEqual(mid, bids[quoteFarIndex].price) && isBuyPreferred(bids[quoteFarIndex].price))
                 {
+                    if (GetQuotedPosition() < -P.bvMaxOutstandingOutrights)
+                        return;
+
+                    if (holding[leanIndex] < -P.maxOutrights)
+                        return;
+
                     int orderId = orders.SendOrder(limitBuyFar, quoteFarIndex, Side.BUY, bids[quoteFarIndex].price, Math.Min(bids[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
                 }
-                else if (!orders.orderInUse(limitSellFar) && pricesAreEqual(mid, asks[quoteFarIndex].price) && GetDirection() == Direction.SELL)
+                else if (!orders.orderInUse(limitSellFar) && pricesAreEqual(mid, asks[quoteFarIndex].price) && isSellPreferred(asks[quoteFarIndex].price))
                 {
+                    if (GetQuotedPosition() > P.bvMaxOutstandingOutrights)
+                        return;
+
+                    if (holding[leanIndex] > P.maxOutrights)
+                        return;
+
                     int orderId = orders.SendOrder(limitSellFar, quoteFarIndex, Side.SELL, asks[quoteFarIndex].price, Math.Min(asks[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
                 }
             }
@@ -410,12 +443,24 @@ namespace StrategyRunner
             {
                 double mid = (asks[instrumentIndex].price + bids[instrumentIndex].price) / 2.0;
 
-                if (!orders.orderInUse(limitBuy) && pricesAreEqual(mid, bids[quoteIndex].price) && GetDirection() == Direction.BUY)
+                if (!orders.orderInUse(limitBuy) && pricesAreEqual(mid, bids[quoteIndex].price) && isBuyPreferred(bids[quoteIndex].price))
                 {
+                    if (GetQuotedPosition() > P.bvMaxOutstandingOutrights)
+                        return;
+
+                    if (holding[leanIndex] < -P.maxOutrights)
+                        return;
+
                     int orderId = orders.SendOrder(limitBuy, quoteIndex, Side.BUY, bids[quoteIndex].price, Math.Min(bids[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
                 }
-                else if (!orders.orderInUse(limitSell) && pricesAreEqual(mid, asks[quoteIndex].price) && GetDirection() == Direction.SELL)
+                else if (!orders.orderInUse(limitSell) && pricesAreEqual(mid, asks[quoteIndex].price) && isSellPreferred(asks[quoteIndex].price))
                 {
+                    if (GetQuotedPosition() < -P.bvMaxOutstandingOutrights)
+                        return;
+
+                    if (holding[leanIndex] > P.maxOutrights)
+                        return;
+
                     int orderId = orders.SendOrder(limitSell, quoteIndex, Side.SELL, asks[quoteIndex].price, Math.Min(asks[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
                 }
             }
@@ -454,10 +499,11 @@ namespace StrategyRunner
             }
         }
 
-        public override void OnProcessMD(VIT vi)
+        public override void OnProcessMD(VIT vit)
         {
             try
             {
+                VI vi = new VI(vit.v, vit.i);
                 int instrumentIndex = vi.i + API.n * vi.v;
 
                 bids[instrumentIndex] = API.GetBid(vi);
@@ -483,20 +529,23 @@ namespace StrategyRunner
                     return;
                 }
 
+                if (activeStopOrders)
+                {
+                    hedging.EvaluateStops();
+                }
+
+                if (GetNetPosition() != 0)
+                    return;
+
                 if (P.bvEnabled && pendingBuys == 0 && pendingSells == 0)
                 {
-                    TakeCross(GetDirection());
+                    TakeCross();
                 }
 
                 if (P.limitBvEnabled)
                 {
                     InsertAtMid(instrumentIndex);
                     CancelOnPriceMove(instrumentIndex);
-                }
-
-                if (activeStopOrders)
-                {
-                    hedging.EvaluateStops();
                 }
             }
             catch (Exception e)
@@ -549,15 +598,20 @@ namespace StrategyRunner
 
         private void ExecuteOtherLegAtMarket(int instrumentIndex, int amount)
         {
+            timeout.Stop();
+            timeout.Start();
+
             if (instrumentIndex == quoteIndex)
             {
                 if (amount < 0)
                 {
                     BuyFar(-amount, "ON_LIMIT_BV");
+                    pendingBuys += -amount;
                 }
                 else if (amount > 0)
                 {
                     SellFar(amount, "ON_LIMIT_BV");
+                    pendingSells += amount;
                 }
             }
             else if (instrumentIndex == quoteFarIndex)
@@ -565,10 +619,12 @@ namespace StrategyRunner
                 if (amount < 0)
                 {
                     BuyNear(-amount, "ON_LIMIT_BV");
+                    pendingBuys += -amount;
                 }
                 else if (amount > 0)
                 {
                     SellNear(amount, "ON_LIMIT_BV");
+                    pendingSells += amount;
                 }
             }
         }
@@ -577,6 +633,9 @@ namespace StrategyRunner
         {
             try
             {
+                if (deal.source == "FW")
+                    return;
+
                 if (pendingOrders.ContainsKey(deal.internalOrderNumber))
                 {
                     pendingOrders[deal.internalOrderNumber] -= deal.amount;
@@ -592,21 +651,23 @@ namespace StrategyRunner
 
                 holding[instrumentIndex] += amount;
 
-                if (deal.isBuy && deal.source != "LIMIT_BV")
-                {
-                    pendingBuys -= deal.amount;
-                }
-                else
-                {
-                    pendingSells -= deal.amount;
-                }
-
                 cashflow += amount * deal.price * -1;
 
                 CheckPending(instrumentIndex);
 
                 if (deal.source != "LIMIT_BV")
+                {
+                    if (deal.isBuy)
+                    {
+                        pendingBuys -= deal.amount;
+                    }
+                    else
+                    {
+                        pendingSells -= deal.amount;
+                    }
+
                     return;
+                }
 
                 ExecuteOtherLegAtMarket(instrumentIndex, amount);
             }

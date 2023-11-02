@@ -67,11 +67,12 @@ namespace StrategyRunner
         public Hedging(Strategy strategy)
         {
             mStrategy = strategy;
-            mHedgeIndices = new List<int>();
-
-            mHedgeIndices.Add(mStrategy.quoteIndex);
-            mHedgeIndices.Add(mStrategy.quoteFarIndex);
-            mHedgeIndices.Add(mStrategy.leanIndex);
+            mHedgeIndices = new List<int>
+            {
+                mStrategy.quoteIndex,
+                mStrategy.quoteFarIndex,
+                mStrategy.leanIndex
+            };
 
             leanBuy = new KGOrder();
             leanSell = new KGOrder();
@@ -130,16 +131,8 @@ namespace StrategyRunner
             mStrategy.API.SendToRemote(String.Format("CANCEL STG {0}: {1}", mStrategy.stgID, reason), KGConstants.EVENT_ERROR);
         }
 
-        private double GetOffset()
-        {
-            return mStrategy.boxTargetPrice;
-            //return mStrategy.config.defaultBaseSpread; TODO: when do we return this?
-        }
-
         private int GetHedgeInstrument(int quantity)
         {
-            //TODO: replace decision to hedge with quote or lean with the new GetDirection() function
-
             int hedgeIndex = -1;
             double bestOffer = double.MaxValue;
             double bestBid = double.MinValue;
@@ -156,9 +149,9 @@ namespace StrategyRunner
                         bestOffer = mStrategy.asks[index].price;
                         hedgeIndex = index;
                     }
-                    else if (index == mStrategy.leanIndex && mStrategy.asks[index].price + GetOffset() < bestOffer)
+                    else if (index == mStrategy.leanIndex && mStrategy.asks[index].price + mStrategy.boxTargetPrice < bestOffer)
                     {
-                        bestOffer = mStrategy.asks[index].price + GetOffset();
+                        bestOffer = mStrategy.asks[index].price + mStrategy.boxTargetPrice;
                         hedgeIndex = index;
                     }
                     else if (mStrategy.asks[index].price == bestOffer)
@@ -181,9 +174,9 @@ namespace StrategyRunner
                         bestBid = mStrategy.bids[index].price;
                         hedgeIndex = index;
                     }
-                    else if (index == mStrategy.leanIndex && mStrategy.bids[index].price + GetOffset() > bestBid)
+                    else if (index == mStrategy.leanIndex && mStrategy.bids[index].price + mStrategy.boxTargetPrice > bestBid)
                     {
-                        bestBid = mStrategy.bids[index].price + GetOffset();
+                        bestBid = mStrategy.bids[index].price + mStrategy.boxTargetPrice;
                         hedgeIndex = index;
                     }
                     else if (mStrategy.bids[index].price == bestBid)

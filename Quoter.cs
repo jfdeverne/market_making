@@ -32,6 +32,7 @@ namespace StrategyRunner
                 leanInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/leanInstrument").InnerText;
                 quoteInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/quoteInstrument").InnerText;
                 limitPlusSize = Int32.Parse(doc.DocumentElement.SelectSingleNode("/strategyRunner/limitPlusSize").InnerText);
+                defaultBaseSpread = Double.Parse(doc.DocumentElement.SelectSingleNode("/strategyRunner/defaultBaseSpread").InnerText);
 
                 if (doc.DocumentElement.ChildNodes.Count > 4)
                     quoteFarInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/farInstrument").InnerText;
@@ -48,9 +49,6 @@ namespace StrategyRunner
                     }
                 }
 
-                if (doc.DocumentElement.ChildNodes.Count > 7)
-                    defaultBaseSpread = Double.Parse(doc.DocumentElement.SelectSingleNode("/strategyRunner/defaultBaseSpread").InnerText);
-
                 api.Log(String.Format("config xml={0}", doc.OuterXml));
                 api.Log("<--Config");
             }
@@ -64,6 +62,8 @@ namespace StrategyRunner
     public class Quoter : Strategy
     {
         public QuoterConfig config;
+
+        double theo;
 
         double maxBidSize;
         double maxAskSize;
@@ -79,8 +79,6 @@ namespace StrategyRunner
         VI quoteInstrument;
         VI quoteFarInstrument;
         VI icsInstrument;
-
-        VIT quoteInstrumentT;
 
         KGOrder buy;
         KGOrder sell;
@@ -122,6 +120,7 @@ namespace StrategyRunner
                 config = new QuoterConfig(configFile, api);
 
                 limitPlusSize = config.limitPlusSize;
+                boxTargetPrice = config.defaultBaseSpread;
 
                 instruments = new List<VI>();
 
@@ -168,8 +167,6 @@ namespace StrategyRunner
                     instruments.Add(quoteFarInstrument);
                 }
 
-                quoteInstrumentT = new VIT(quoteVenue, quoteIndexGlobal, 0, 0);
-
                 strategyOrders = new List<KGOrder>();
 
                 buy = new KGOrder();
@@ -197,12 +194,6 @@ namespace StrategyRunner
             {
                 API.Log("ERR: " + e.ToString() + "," + e.StackTrace);
             }
-        }
-
-        private double GetOffset()
-        {
-            return boxTargetPrice;
-            //return config.defaultBaseSpread; TODO: when do we return this?
         }
 
         private static double RoundToNearestTick(double price, double tick)
@@ -314,7 +305,7 @@ namespace StrategyRunner
             return Math.Abs(price1 - price2) < 1e-5;
         }
 
-        private bool shouldQuote(VIT viLean)
+        private bool shouldQuote(VI viLean)
         {
             if (P.joinFactor == 0)
             {
@@ -346,21 +337,21 @@ namespace StrategyRunner
             return true;
         }
 
-        private (double, double) getMinimumLonelinessConstrainedBidAsk(VIT instrument)
+        private (double, double) getMinimumLonelinessConstrainedBidAsk(VI instrument) //IF THERE IS NO farInstrument
         {
             List<DepthElement> bidDepth = API.GetBidDepth(instrument);
             List<DepthElement> askDepth = API.GetAskDepth(instrument);
 
-            int bidVolume = 0;
-            int askVolume = 0;
+            int cumulativeBidSize = 0;
+            int cumulativeAskSize = 0;
 
             double bid = -11;
             double ask = 11111;
 
             for (int levelIndex = 0; levelIndex < 5; ++levelIndex)
             {
-                bidVolume += bidDepth[levelIndex].qty;
-                if (bidVolume >= config.size * P.joinFactor)
+                cumulativeBidSize += bidDepth[levelIndex].qty;
+                if (cumulativeBidSize >= config.size * P.joinFactor) 
                 {
                     bid = bidDepth[levelIndex].price;
                     break;
@@ -370,8 +361,8 @@ namespace StrategyRunner
 
             for (int levelIndex = 0; levelIndex < 5; ++levelIndex)
             {
-                askVolume += askDepth[levelIndex].qty;
-                if (askVolume >= config.size * P.joinFactor)
+                cumulativeAskSize += askDepth[levelIndex].qty;
+                if (cumulativeAskSize >= config.size * P.joinFactor)
                 {
                     ask = askDepth[levelIndex].price;
                     break;
@@ -379,6 +370,104 @@ namespace StrategyRunner
             }
 
             return (bid, ask);
+        }
+
+        private (double, double) getMinimumLonelinessConstrainedBidAsk(VI instrument, VI farInstrument)
+        {
+            double bid = -11;
+            double ask = 11111;
+            try
+            {
+                List<DepthElement> bidDepth = API.GetBidDepth(instrument);
+                List<DepthElement> askDepth = API.GetAskDepth(instrument);
+                List<DepthElement> bidDepthFar = API.GetBidDepth(farInstrument);
+                List<DepthElement> askDepthFar = API.GetAskDepth(farInstrument);
+
+                int cumulativeBidSize = 0;
+                int cumulativeAskSize = 0;
+                int cumulativeBidSizeFar = 0;
+                int cumulativeAskSizeFar = 0;
+
+                int levelIndex = 0;
+                int levelIndexFar = 0;
+                double lastBid = bid;
+                double lastAsk = ask;
+                bool reachedSizeTH = false;
+                while (((levelIndex < 5) | (levelIndexFar < 5)) & !reachedSizeTH)
+                {
+                    if (bidDepth[levelIndex].price > bidDepthFar[levelIndexFar].price)
+                    {
+                        lastBid = bidDepth[levelIndex].price;
+                        cumulativeBidSize += bidDepth[levelIndex].qty;
+                        if (levelIndex < 5)
+                            levelIndex++;
+                    }
+                    else if (bidDepth[levelIndex].price < bidDepthFar[levelIndexFar].price)
+                    {
+                        lastBid = bidDepthFar[levelIndexFar].price;
+                        cumulativeBidSizeFar += bidDepthFar[levelIndexFar].qty;
+                        if (levelIndexFar < 5)
+                            levelIndexFar++;
+                    }
+                    else //==
+                    {
+                        lastBid = bidDepth[levelIndex].price;
+                        cumulativeBidSize += bidDepth[levelIndex].qty;
+                        if (levelIndex < 5)
+                            levelIndex++;
+                        cumulativeBidSizeFar += bidDepthFar[levelIndexFar].qty; ;
+                        if (levelIndexFar < 5)
+                            levelIndexFar++;
+                    }
+                    if ((cumulativeBidSize >= config.size * P.joinFactor) | (cumulativeBidSize + cumulativeBidSizeFar >= config.size * P.joinFactorAllVenues))
+                    {
+                        bid = lastBid;
+                        reachedSizeTH = true;
+                    }
+                }
+
+                levelIndex = 0;
+                levelIndexFar = 0;
+                reachedSizeTH = false;
+                while (((levelIndex < 5) | (levelIndexFar < 5)) & !reachedSizeTH)
+                {
+                    if (askDepth[levelIndex].price < askDepthFar[levelIndexFar].price)
+                    {
+                        lastAsk = askDepth[levelIndex].price;
+                        cumulativeAskSize += askDepth[levelIndex].qty;
+                        if (levelIndex < 5)
+                            levelIndex++;
+                    }
+                    else if (askDepth[levelIndex].price > askDepthFar[levelIndexFar].price)
+                    {
+                        lastAsk = askDepthFar[levelIndexFar].price;
+                        cumulativeAskSizeFar += askDepthFar[levelIndexFar].qty;
+                        if (levelIndexFar < 5)
+                            levelIndexFar++;
+                    }
+                    else //==
+                    {
+                        lastBid = askDepth[levelIndex].price;
+                        cumulativeAskSize += askDepth[levelIndex].qty;
+                        if (levelIndex < 5)
+                            levelIndex++;
+                        cumulativeAskSizeFar += askDepthFar[levelIndexFar].qty; ;
+                        if (levelIndexFar < 5)
+                            levelIndexFar++;
+                    }
+                    if ((cumulativeAskSize >= config.size * P.joinFactor) | (cumulativeAskSize + cumulativeAskSizeFar >= config.size * P.joinFactorAllVenues))
+                    {
+                        ask = lastAsk;
+                        reachedSizeTH = true;
+                    }
+                }
+                return (bid, ask);
+            }
+            catch (Exception e)
+            {
+                API.Log("getMinimumLonelinessConstrainedBidAsk ERR: " + e.ToString() + "," + e.StackTrace);
+                return (bid, ask);
+            }
         }
 
         private void PullQuotes()
@@ -421,10 +510,11 @@ namespace StrategyRunner
             }
         }
 
-        public override void OnProcessMD(VIT vi)
+        public override void OnProcessMD(VIT vit)
         {
             try
             {
+                VI vi = new VI(vit.v, vit.i);
                 int instrumentIndex = vi.i + API.n * vi.v;
 
                 prevBid = bids[instrumentIndex];
@@ -458,7 +548,7 @@ namespace StrategyRunner
 
                 baseSpreads.ManageBaseSpreads();
 
-                double theo = API.GetImprovedCM(instrumentIndex);
+                theo = API.GetImprovedCM(instrumentIndex);
 
                 bool quote = shouldQuote(vi) && !pricesAreEqual(theo, -11);
 
@@ -524,12 +614,10 @@ namespace StrategyRunner
                     return;
                 }
 
-                double offset = GetOffset();
-
-                double quoteTheo = theo + offset;
+                double quoteTheo = theo + boxTargetPrice;
 
                 var (quoteBid, quoteAsk) = GetBidAsk(quoteTheo, tickSize, (config.width / 2.0), quoteIndex);
-                var (maxBid, minAsk) = getMinimumLonelinessConstrainedBidAsk(quoteInstrumentT);
+                var (maxBid, minAsk) = getMinimumLonelinessConstrainedBidAsk(quoteInstrument, quoteFarInstrument);
 
                 if (pricesAreEqual(maxBid, -11) || pricesAreEqual(minAsk, 11111))
                 {
@@ -581,12 +669,12 @@ namespace StrategyRunner
 
                 if (!orders.orderInUse(buy) && !orders.orderInTransientState(buy) && quote)
                 {
-                    orders.SendOrder(buy, quoteIndex, Side.BUY, quoteSizeBid, config.size, "MM");
+                    orders.SendOrder(buy, quoteIndex, Side.BUY, quoteBid, quoteSizeBid, "MM");
                 }
 
                 if (!orders.orderInUse(sell) && !orders.orderInTransientState(sell) && quote)
                 {
-                    orders.SendOrder(sell, quoteIndex, Side.SELL, quoteSizeAsk, config.size, "MM");
+                    orders.SendOrder(sell, quoteIndex, Side.SELL, quoteAsk, quoteSizeAsk, "MM");
                 }
             }
             catch (Exception e)
@@ -604,6 +692,9 @@ namespace StrategyRunner
         {
             try
             {
+                if (deal.source == "FW")
+                    return;
+
                 int amount = deal.isBuy ? deal.amount : -deal.amount;
 
                 int instrumentIndex = deal.index + API.n * deal.VenueID;

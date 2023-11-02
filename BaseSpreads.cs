@@ -310,8 +310,6 @@ namespace StrategyRunner
 
         public void GetPosition()
         {
-            //var holdings = API.GetUserHolding(0);  //do this to update global position, discuss
-
             int ownPosition = mQuoter.holding[mQuoter.quoteIndex] + mQuoter.holding[mQuoter.quoteFarIndex];
 
             int icsPosition = 0;
@@ -328,5 +326,4 @@ namespace StrategyRunner
             }
         }
     }
-
 }
