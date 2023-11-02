@@ -486,43 +486,46 @@ namespace StrategyRunner
         {
             try
             {
-                if (strategies[stgID].linkedBoxIndex > -1)
+                if (strategies.ContainsKey(stgID))
                 {
-                    boxes[strategies[stgID].linkedBoxIndex].targetPrice = API.GetBoxTargetPrice(stgID);
-                    strategies[stgID].boxTargetPrice = boxes[strategies[stgID].linkedBoxIndex].targetPrice;
-                }
-                else
-                {
-                    for (int i = 0; i < NBoxes; i++)
+                    if (strategies[stgID].linkedBoxIndex > -1)
                     {
-                        boxes[i].ICM = API.GetImprovedCM(boxIndices[0]) - API.GetImprovedCM(boxIndices[1]) - (API.GetImprovedCM(boxIndices[2]) - API.GetImprovedCM(boxIndices[3]));
-                        boxTargetPrices[i, 0] = boxes[i].targetPrice;
+                        boxes[strategies[stgID].linkedBoxIndex].targetPrice = API.GetBoxTargetPrice(stgID);
+                        strategies[stgID].boxTargetPrice = boxes[strategies[stgID].linkedBoxIndex].targetPrice;
                     }
-                    for (int i = 0; i < outrightIndices.Length; i++)
+                    else
                     {
-                        outrightICMs[i, 0] = API.GetImprovedCM(outrightIndices[i]);
-                    }
-
-                    outrightTargetPrices = outrightICMs.Addition(VTVVTInv.Multiply(boxTargetPrices.Subtraction(V.Multiply(outrightICMs))));
-                    if (strategies.ContainsKey(stgID))
-                    {
-                        double targetBoxPrice = 0;
+                        for (int i = 0; i < NBoxes; i++)
+                        {
+                            boxes[i].ICM = API.GetImprovedCM(boxIndices[0]) - API.GetImprovedCM(boxIndices[1]) - (API.GetImprovedCM(boxIndices[2]) - API.GetImprovedCM(boxIndices[3]));
+                            boxTargetPrices[i, 0] = boxes[i].targetPrice;
+                        }
                         for (int i = 0; i < outrightIndices.Length; i++)
                         {
-                            if (strategies[stgID].quoteIndex == outrightIndices[i])
-                                targetBoxPrice += outrightTargetPrices[i, 0];
-                            else if (strategies[stgID].leanIndex == outrightIndices[i])
-                                targetBoxPrice -= outrightTargetPrices[i, 0];
+                            outrightICMs[i, 0] = API.GetImprovedCM(outrightIndices[i]);
                         }
-                        strategies[stgID].boxTargetPrice = targetBoxPrice;
+
+                        outrightTargetPrices = outrightICMs.Addition(VTVVTInv.Multiply(boxTargetPrices.Subtraction(V.Multiply(outrightICMs))));
+                        if (strategies.ContainsKey(stgID))
+                        {
+                            double targetBoxPrice = 0;
+                            for (int i = 0; i < outrightIndices.Length; i++)
+                            {
+                                if (strategies[stgID].quoteIndex == outrightIndices[i])
+                                    targetBoxPrice += outrightTargetPrices[i, 0];
+                                else if (strategies[stgID].leanIndex == outrightIndices[i])
+                                    targetBoxPrice -= outrightTargetPrices[i, 0];
+                            }
+                            strategies[stgID].boxTargetPrice = targetBoxPrice;
+                        }
                     }
-                }
-                if (strategies.ContainsKey(stgID))
+
                     strategies[stgID].OnProcessMD(vi);
+                }
             }
-            catch (Exception)
+            catch (Exception e)
             {
-                API.SendToRemote("API_OnProcessMD:", KGConstants.EVENT_ERROR);
+                API.SendToRemote(String.Format("API_OnProcessMD: {0}", e.Message), KGConstants.EVENT_ERROR);
             }
         }
 
