@@ -5,18 +5,6 @@ using System.Text.Json;
 using KGClasses;
 using System.Collections.Generic;
 
-namespace Detail
-{
-    public class PositionInfo
-    {
-        public double averagePrice { get; set; }
-        public double averageLeanPrice { get; set; }
-        public double averageQuotePrice { get; set; }
-    }
-}
-
-//TODO: replace current logic with GetDirection
-
 namespace StrategyRunner
 {
 	public class BaseSpreads
@@ -32,10 +20,6 @@ namespace StrategyRunner
         KGOrder mLeanSell;
         KGOrder mQuotedBuy;
         KGOrder mQuotedSell;
-
-        PositionInfo positionInfo;
-        string positionInfoFile;
-        JsonSerializerOptions jsonOptions;
 
         double baseSpreadBid;
         double baseSpreadAsk;
@@ -72,21 +56,6 @@ namespace StrategyRunner
 
             TimeSpan tBs = new TimeSpan(0, 0, 0, 0, P.baseSpreadThrottleSeconds * 1000);
             mBaseSpreadThrottler = new Throttler.Throttler(P.baseSpreadThrottleVolume, tBs);
-            positionInfoFile = "position/" + mQuoter.config.quoteInstrument + "_position_info.json";
-            jsonOptions = new JsonSerializerOptions
-            {
-                WriteIndented = true
-            };
-            if (File.Exists(positionInfoFile))
-            {
-                string jsonFromFile = File.ReadAllText(positionInfoFile);
-                positionInfo = JsonSerializer.Deserialize<Detail.PositionInfo>(jsonFromFile);
-            }
-            else
-            {
-                positionInfo = new PositionInfo();
-                Log("WRN: position file not found");
-            }
         }
 
         public void OnUpdatedParams()
@@ -120,32 +89,6 @@ namespace StrategyRunner
                 default:
                     throw new Exception("offset index out of bounds");
             }
-        }
-
-        public void UpdateBaseSpreadsAveragePrice(int tradeAmount, double tradePrice, int index)
-        {
-            if (index == mQuoter.leanIndex)
-            {
-                double weightedCurrentAveragePrice = positionInfo.averageLeanPrice * Math.Abs(mQuoter.holding[mQuoter.leanIndex] - tradeAmount);
-                double newComponent = Math.Abs(tradeAmount) * tradePrice;
-                positionInfo.averageLeanPrice = mQuoter.holding[mQuoter.leanIndex] != 0 ? (weightedCurrentAveragePrice + newComponent) / Math.Abs(mQuoter.holding[mQuoter.leanIndex]) : 0;
-            }
-
-            if (index == mQuoter.quoteIndex || index == mQuoter.quoteFarIndex)
-            {
-                double weightedCurrentAveragePrice = positionInfo.averageQuotePrice * Math.Abs(mQuoter.holding[mQuoter.quoteIndex] + mQuoter.holding[mQuoter.quoteFarIndex] - tradeAmount);
-                double newComponent = Math.Abs(tradeAmount) * tradePrice;
-                positionInfo.averageQuotePrice = mQuoter.holding[mQuoter.quoteIndex] + mQuoter.holding[mQuoter.quoteFarIndex] != 0 ? (weightedCurrentAveragePrice + newComponent) / Math.Abs(mQuoter.holding[mQuoter.quoteIndex] + mQuoter.holding[mQuoter.quoteFarIndex]) : 0;
-            }
-
-            if (unhedgedOutrightPosition != 0)
-            {
-                return;
-            }
-            positionInfo.averagePrice = positionInfo.averageQuotePrice - positionInfo.averageLeanPrice;
-
-            string positionInfoJson = JsonSerializer.Serialize(positionInfo, jsonOptions);
-            File.WriteAllText(positionInfoFile, positionInfoJson);
         }
 
         private void ManagePendingOrders(int orderId, int amount)
@@ -269,7 +212,7 @@ namespace StrategyRunner
 
             int volume = baseSpreadPosition - pendingBaseSpreadOrders;
 
-            if (baseSpreadPosition < GetDesired() && baseSpreadAsk < positionInfo.averagePrice - P.creditOffset)
+            if (baseSpreadPosition < GetDesired() && baseSpreadAsk < mQuoter.boxTargetPrice - P.creditOffset)
             {
                 if (!mBaseSpreadThrottler.addTrade(volume))
                     return;
@@ -278,7 +221,7 @@ namespace StrategyRunner
                 return;
             }
 
-            if (baseSpreadPosition > GetDesired() && baseSpreadBid > positionInfo.averagePrice + P.creditOffset)
+            if (baseSpreadPosition > GetDesired() && baseSpreadBid > mQuoter.boxTargetPrice + P.creditOffset)
             {
                 if (!mBaseSpreadThrottler.addTrade(volume))
                     return;
@@ -287,7 +230,7 @@ namespace StrategyRunner
                 return;
             }
 
-            if (mQuoter.asks[mQuoter.quoteIndex].price - mQuoter.bids[mQuoter.leanIndex].price <= positionInfo.averagePrice && mQuoter.holding[mQuoter.leanIndex] > -GetDesired() && mQuoter.holding[mQuoter.quoteIndex] < GetDesired())
+            if (mQuoter.asks[mQuoter.quoteIndex].price - mQuoter.bids[mQuoter.leanIndex].price <= mQuoter.boxTargetPrice && mQuoter.holding[mQuoter.leanIndex] > -GetDesired() && mQuoter.holding[mQuoter.quoteIndex] < GetDesired())
             {
                 if (!mBaseSpreadThrottler.addTrade(volume))
                     return;
@@ -297,7 +240,7 @@ namespace StrategyRunner
                 return;
             }
 
-            if (mQuoter.bids[mQuoter.quoteIndex].price - mQuoter.asks[mQuoter.leanIndex].price >= positionInfo.averagePrice && mQuoter.holding[mQuoter.leanIndex] < -GetDesired() && mQuoter.holding[mQuoter.quoteIndex] > GetDesired())
+            if (mQuoter.bids[mQuoter.quoteIndex].price - mQuoter.asks[mQuoter.leanIndex].price >= mQuoter.boxTargetPrice && mQuoter.holding[mQuoter.leanIndex] < -GetDesired() && mQuoter.holding[mQuoter.quoteIndex] > GetDesired())
             {
                 if (!mBaseSpreadThrottler.addTrade(volume))
                     return;

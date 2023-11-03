@@ -62,6 +62,16 @@ namespace StrategyRunner
 {
     public class BV : Strategy
     {
+        public double BVBuyPrice;
+        public double BVSellPrice; //POTENTIALLY BVSellPrice < BVBuyPrice IF THERE'S ARBITRAGE
+        public int BVBuyIndex;
+        public int BVSellIndex;
+
+        public double limitBVSellPrice;
+        public double limitBVBuyPrice;
+        public int limitBVBuyIndex;
+        public int limitBVSellIndex;
+
         private BVConfig.BVConfig config;
 
         public int numAllInstruments;
@@ -250,30 +260,15 @@ namespace StrategyRunner
             return holding[quoteIndex] + holding[quoteFarIndex];
         }
 
-        private int SellNear(int n, string source)
+        private int Buy(int n, string source, int index, double price)
         {
-            int orderId = orders.SendOrder(sell, quoteIndex, Side.SELL, bids[quoteIndex].price, n, source);
+            int orderId = orders.SendOrder(buy, index, Side.BUY, price, n, source);
             pendingOrders[orderId] = n;
             return orderId;
         }
-
-        private int BuyNear(int n, string source)
+        private int Sell(int n, string source, int index, double price)
         {
-            int orderId = orders.SendOrder(buy, quoteIndex, Side.BUY, asks[quoteIndex].price, n, source);
-            pendingOrders[orderId] = n;
-            return orderId;
-        }
-
-        private int SellFar(int n, string source)
-        {
-            int orderId = orders.SendOrder(sellFar, quoteFarIndex, Side.SELL, bids[quoteFarIndex].price, n, source);
-            pendingOrders[orderId] = n;
-            return orderId;
-        }
-
-        private int BuyFar(int n, string source)
-        {
-            int orderId = orders.SendOrder(buyFar, quoteFarIndex, Side.BUY, asks[quoteFarIndex].price, n, source);
+            int orderId = orders.SendOrder(sell, index, Side.SELL, price, n, source);
             pendingOrders[orderId] = n;
             return orderId;
         }
@@ -322,8 +317,11 @@ namespace StrategyRunner
 
         private void TakeCross()
         {
-            if (bids[quoteIndex].price == asks[quoteFarIndex].price)
+            if (bids[quoteIndex].price >= asks[quoteFarIndex].price)
             {
+                BVSellPrice = bids[quoteIndex].price;
+                BVBuyPrice = asks[quoteFarIndex].price;
+
                 if (GetQuotedPosition() < -P.bvMaxOutstandingOutrights)
                     return;
 
@@ -349,23 +347,30 @@ namespace StrategyRunner
                 if (!bvThrottler.addTrade(volume))
                     return;
 
-                if (isSellPreferred(bids[quoteIndex].price))
+                if (isSellPreferred(BVSellPrice))
                 {
-                    SellNear(volume, "BV");
-                    BuyFar(volume, "BV");
+                    BVSellIndex = quoteIndex;
+                    BVBuyIndex = quoteFarIndex;
+                    Sell(volume, "BV", BVSellIndex, BVSellPrice);
+                    Buy(volume, "BV", BVBuyIndex, BVBuyPrice);
                 }
-                else
+                else if (isBuyPreferred(BVBuyPrice))
                 {
-                    int orderId = SellNear(volume, "BV");
-                    pendingTrades[quoteIndex] = volume;
+                    BVSellIndex = quoteIndex;
+                    BVBuyIndex = quoteFarIndex;
+                    int orderId = Buy(volume, "BV", BVBuyIndex, BVBuyPrice);
+                    pendingTrades[BVBuyIndex] = -volume;
                 }
 
                 pendingBuys += volume;
                 pendingSells += volume;
             }
 
-            if (asks[quoteIndex].price == bids[quoteFarIndex].price)
+            if (asks[quoteIndex].price <= bids[quoteFarIndex].price)
             {
+                BVSellPrice = bids[quoteFarIndex].price;
+                BVBuyPrice = asks[quoteIndex].price;
+
                 if (GetQuotedPosition() > P.bvMaxOutstandingOutrights)
                     return;
 
@@ -391,15 +396,19 @@ namespace StrategyRunner
                 if (!bvThrottler.addTrade(volume))
                     return;
 
-                if (isBuyPreferred(asks[quoteIndex].price))
+                if (isBuyPreferred(BVBuyPrice))
                 {
-                    BuyNear(volume, "BV");
-                    SellFar(volume, "BV");
+                    BVSellIndex = quoteFarIndex;
+                    BVBuyIndex = quoteIndex;
+                    Buy(volume, "BV", BVBuyIndex, BVBuyPrice);
+                    Sell(volume, "BV", BVSellIndex, BVSellPrice);
                 }
-                else
+                else if (isSellPreferred(BVSellPrice))
                 {
-                    int orderId = BuyNear(volume, "BV");
-                    pendingTrades[quoteIndex] = -volume;
+                    BVSellIndex = quoteFarIndex;
+                    BVBuyIndex = quoteIndex;
+                    int orderId = Sell(volume, "BV", BVSellIndex, BVSellPrice);
+                    pendingTrades[BVSellIndex] = volume;
                 }
 
                 pendingBuys += volume;
@@ -412,91 +421,43 @@ namespace StrategyRunner
             return Math.Abs(price1 - price2) < 1e-5;
         }
 
-        private void InsertAtMid(int instrumentIndex)
+        private void SendLimitOrders()
         {
-            if (instrumentIndex == quoteIndex)
+            int ordId;
+            if (isBuyPreferred(bids[quoteIndex].price) && (bids[quoteFarIndex].price <= bids[quoteIndex].price))
             {
-                double mid = (asks[instrumentIndex].price + bids[instrumentIndex].price) / 2.0;
-
-                if (!orders.orderInUse(limitBuyFar) && pricesAreEqual(mid, bids[quoteFarIndex].price) && isBuyPreferred(bids[quoteFarIndex].price))
+                if ((GetQuotedPosition() > -P.bvMaxOutstandingOutrights) && (holding[leanIndex] > -P.maxOutrights) && (!orders.orderInUse(limitBuyFar)))
                 {
-                    if (GetQuotedPosition() < -P.bvMaxOutstandingOutrights)
-                        return;
-
-                    if (holding[leanIndex] < -P.maxOutrights)
-                        return;
-
-                    int orderId = orders.SendOrder(limitBuyFar, quoteFarIndex, Side.BUY, bids[quoteFarIndex].price, Math.Min(bids[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
-                }
-                else if (!orders.orderInUse(limitSellFar) && pricesAreEqual(mid, asks[quoteFarIndex].price) && isSellPreferred(asks[quoteFarIndex].price))
-                {
-                    if (GetQuotedPosition() > P.bvMaxOutstandingOutrights)
-                        return;
-
-                    if (holding[leanIndex] > P.maxOutrights)
-                        return;
-
-                    int orderId = orders.SendOrder(limitSellFar, quoteFarIndex, Side.SELL, asks[quoteFarIndex].price, Math.Min(asks[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
+                    limitBVBuyPrice = bids[quoteIndex].price;
+                    limitBVBuyIndex = quoteFarIndex;
+                    limitBVSellIndex = quoteIndex;
+                    
+                    int volume = Math.Min(bids[quoteIndex].qty / 2, P.maxCrossVolume);
+                    if (volume > 0)
+                        ordId = orders.SendOrder(limitBuyFar, limitBVBuyIndex, Side.BUY, limitBVBuyPrice, volume, "LIMIT_BV");
                 }
             }
-            else if (instrumentIndex == quoteFarIndex)
+            if (isSellPreferred(asks[quoteIndex].price) && (asks[quoteFarIndex].price >= asks[quoteIndex].price))
             {
-                double mid = (asks[instrumentIndex].price + bids[instrumentIndex].price) / 2.0;
-
-                if (!orders.orderInUse(limitBuy) && pricesAreEqual(mid, bids[quoteIndex].price) && isBuyPreferred(bids[quoteIndex].price))
+                if ((GetQuotedPosition() < P.bvMaxOutstandingOutrights) && (holding[leanIndex] < P.maxOutrights) && (!orders.orderInUse(limitSellFar)))
                 {
-                    if (GetQuotedPosition() > P.bvMaxOutstandingOutrights)
-                        return;
+                    limitBVSellPrice = asks[quoteIndex].price;
+                    limitBVSellIndex = quoteFarIndex;
+                    limitBVBuyIndex = quoteIndex;
 
-                    if (holding[leanIndex] < -P.maxOutrights)
-                        return;
-
-                    int orderId = orders.SendOrder(limitBuy, quoteIndex, Side.BUY, bids[quoteIndex].price, Math.Min(bids[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
-                }
-                else if (!orders.orderInUse(limitSell) && pricesAreEqual(mid, asks[quoteIndex].price) && isSellPreferred(asks[quoteIndex].price))
-                {
-                    if (GetQuotedPosition() < -P.bvMaxOutstandingOutrights)
-                        return;
-
-                    if (holding[leanIndex] > P.maxOutrights)
-                        return;
-
-                    int orderId = orders.SendOrder(limitSell, quoteIndex, Side.SELL, asks[quoteIndex].price, Math.Min(asks[instrumentIndex].qty, P.maxCrossVolume), "LIMIT_BV");
+                    int volume = Math.Min(asks[quoteIndex].qty / 2, P.maxCrossVolume);
+                    if (volume > 0)
+                        ordId = orders.SendOrder(limitSellFar, limitBVSellIndex, Side.SELL, limitBVSellPrice, volume, "LIMIT_BV");
                 }
             }
         }
 
         private void CancelOnPriceMove(int instrumentIndex)
         {
-            //TODO: we can get filled on the order on price move on the exchange it's working even if the price is still the mid of the other exchange
-            //might wanna add some loneliness or improvedcm criterion
-
-            if (instrumentIndex == quoteIndex)
-            {
-                double mid = (asks[instrumentIndex].price + bids[instrumentIndex].price) / 2.0;
-
-                if (orders.orderInUse(limitBuyFar) && !pricesAreEqual(mid, bids[quoteFarIndex].price))
-                {
-                    orders.CancelOrder(limitBuyFar);
-                }
-                else if (orders.orderInUse(limitSellFar) && !pricesAreEqual(mid, asks[quoteFarIndex].price))
-                {
-                    orders.CancelOrder(limitSellFar);
-                }
-            }
-            else if (instrumentIndex == quoteFarIndex)
-            {
-                double mid = (asks[instrumentIndex].price + bids[instrumentIndex].price) / 2.0;
-
-                if (orders.orderInUse(limitBuy) && !pricesAreEqual(mid, bids[quoteIndex].price))
-                {
-                    orders.CancelOrder(limitBuy);
-                }
-                else if (orders.orderInUse(limitSell) && !pricesAreEqual(mid, asks[quoteIndex].price))
-                {
-                    orders.CancelOrder(limitSell);
-                }
-            }
+            if ((!pricesAreEqual(limitBVBuyPrice, bids[quoteIndex].price)) && (orders.orderInUse(limitBuyFar)))
+                orders.CancelOrder(limitBuyFar);
+            else if ((!pricesAreEqual(limitBVSellPrice, asks[quoteIndex].price)) && (orders.orderInUse(limitSellFar)))
+                orders.CancelOrder(limitSellFar);
         }
 
         public override void OnProcessMD(VIT vit)
@@ -544,7 +505,7 @@ namespace StrategyRunner
 
                 if (P.limitBvEnabled)
                 {
-                    InsertAtMid(instrumentIndex);
+                    SendLimitOrders();
                     CancelOnPriceMove(instrumentIndex);
                 }
             }
@@ -570,28 +531,12 @@ namespace StrategyRunner
             if (pendingTrades.ContainsKey(instrumentIndex))
             {
                 int volume = pendingTrades[instrumentIndex];
-                if (instrumentIndex == quoteIndex)
-                {
-                    if (volume > 0)
-                    {
-                        BuyFar(volume, "BV");
-                    }
-                    else if (volume < 0)
-                    {
-                        SellFar(-volume, "BV");
-                    }
-                }
-                else if (instrumentIndex == quoteFarIndex)
-                {
-                    if (volume > 0)
-                    {
-                        BuyNear(volume, "BV");
-                    }
-                    else if (volume < 0)
-                    {
-                        SellNear(-volume, "BV");
-                    }
-                }
+
+                if (volume > 0)
+                    Buy(volume, "BV", BVBuyIndex, BVBuyPrice);
+                else if (volume < 0)
+                    Sell(-volume, "BV", BVSellIndex, BVSellPrice);
+
                 pendingTrades.Remove(instrumentIndex);
             }
         }
@@ -600,32 +545,15 @@ namespace StrategyRunner
         {
             timeout.Stop();
             timeout.Start();
-
-            if (instrumentIndex == quoteIndex)
+            if (amount < 0)
             {
-                if (amount < 0)
-                {
-                    BuyFar(-amount, "ON_LIMIT_BV");
-                    pendingBuys += -amount;
-                }
-                else if (amount > 0)
-                {
-                    SellFar(amount, "ON_LIMIT_BV");
-                    pendingSells += amount;
-                }
+                Buy(-amount, "ON_LIMIT_BV", limitBVBuyIndex, limitBVSellPrice);
+                pendingBuys += -amount;
             }
-            else if (instrumentIndex == quoteFarIndex)
+            else if (amount > 0)
             {
-                if (amount < 0)
-                {
-                    BuyNear(-amount, "ON_LIMIT_BV");
-                    pendingBuys += -amount;
-                }
-                else if (amount > 0)
-                {
-                    SellNear(amount, "ON_LIMIT_BV");
-                    pendingSells += amount;
-                }
+                Sell(amount, "ON_LIMIT_BV", limitBVSellIndex, limitBVBuyPrice);
+                pendingSells += amount;
             }
         }
 
