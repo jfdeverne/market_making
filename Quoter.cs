@@ -706,7 +706,6 @@ namespace StrategyRunner
 
                 baseSpreads.ManagePendingOrders(deal);
                 baseSpreads.GetPosition();
-                baseSpreads.UpdateBaseSpreadsAveragePrice(amount, deal.price, instrumentIndex);
 
                 if (deal.source == "MM" && instrumentIndex == quoteIndex)
                 {
