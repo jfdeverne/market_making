@@ -5,6 +5,8 @@ using StrategyLib;
 using System.Timers;
 using Detail;
 using System.Xml;
+using System.Reflection;
+using System.Reflection.Emit;
 
 namespace Detail
 {
@@ -95,21 +97,24 @@ namespace StrategyRunner
 
         List<VI> instruments;
         Dictionary<int /*orderId*/, int /*amount*/> pendingOrders;
+        Dictionary<int /*orderId*/, int /*volume*/> pendingResubmissions;
 
         Throttler.Throttler bvThrottler;
-
-        int pendingBuys = 0;
-        int pendingSells = 0;
 
         Timer timeout;
 
         Hedging hedging;
 
-        double positionValue;
-        double cashflow;
-        double pnl;
-
         Dictionary<int, int> pendingTrades;
+
+        public static int bvThrottleSeconds;
+        public static int bvThrottleVolume;
+        public static double creditOffset;
+        public static int maxCrossVolume;
+        public static int maxOutrights;
+        public static int bvMaxOutstandingOutrights;
+        public static double bvTimeoutSeconds;
+        public static double bvMaxLoss;
 
         public BV(API api, string configFile)
         {
@@ -184,15 +189,16 @@ namespace StrategyRunner
                 limitSellFar = new KGOrder();
                 strategyOrders.Add(limitSellFar);
 
-                TimeSpan tBv = new TimeSpan(0, 0, 0, 0, P.bvThrottleSeconds * 1000);
+                TimeSpan tBv = new TimeSpan(0, 0, 0, 0, GetBvThrottleSeconds() * 1000);
 
-                bvThrottler = new Throttler.Throttler(P.bvThrottleVolume, tBv);
+                bvThrottler = new Throttler.Throttler(GetBvThrottleVolume(), tBv);
 
                 timeout = new Timer();
                 timeout.Elapsed += OnTimeout;
                 timeout.AutoReset = false;
 
                 pendingTrades = new Dictionary<int, int>();
+                pendingResubmissions = new Dictionary<int, int>();
 
                 orders = new Orders(this);
                 hedging = new Hedging(this);
@@ -206,6 +212,62 @@ namespace StrategyRunner
             {
                 API.Log("ERR: " + e.ToString() + "," + e.StackTrace);
             }
+        }
+
+        private int GetBvThrottleSeconds()
+        {
+            if (bvThrottleSeconds == -1)
+                return P.bvThrottleSeconds;
+            return bvThrottleSeconds;
+        }
+
+        private int GetBvThrottleVolume()
+        {
+            if (bvThrottleVolume == -1)
+                return P.bvThrottleVolume;
+            return bvThrottleVolume;
+        }
+
+        private double GetCreditOffset()
+        {
+            if (creditOffset == -1)
+                return P.creditOffset;
+            return creditOffset;
+        }
+
+        private int GetMaxCrossVolume()
+        {
+            if (maxCrossVolume == -1)
+                return P.maxCrossVolume;
+            return maxCrossVolume;
+        }
+
+        private int GetMaxOutrights()
+        {
+            if (maxOutrights == -1)
+                return P.maxOutrights;
+            return maxOutrights;
+        }
+
+        private int GetBvMaxOutstandingOutrights()
+        {
+            if (bvMaxOutstandingOutrights == -1)
+                return P.bvMaxOutstandingOutrights;
+            return bvMaxOutstandingOutrights;
+        }
+
+        private double GetBvTimeoutSeconds()
+        {
+            if (bvTimeoutSeconds == -1)
+                return P.bvTimeoutSeconds;
+            return bvTimeoutSeconds;
+        }
+
+        private double GetBvMaxLoss()
+        {
+            if (bvMaxLoss == -1)
+                return P.bvMaxLoss;
+            return bvMaxLoss;
         }
 
         private void Log(string message)
@@ -275,7 +337,7 @@ namespace StrategyRunner
 
         private bool isBuyPreferred(double BVPrice)
         {
-            if (BVPrice - API.GetImprovedCM(leanIndex) < boxTargetPrice - P.creditOffset)
+            if (BVPrice - API.GetImprovedCM(leanIndex) < boxTargetPrice - GetCreditOffset())
                 return true;
             else
                 return false;
@@ -283,7 +345,7 @@ namespace StrategyRunner
 
         private bool isSellPreferred(double BVPrice)
         {
-            if (BVPrice - API.GetImprovedCM(leanIndex) > boxTargetPrice + P.creditOffset)
+            if (BVPrice - API.GetImprovedCM(leanIndex) > boxTargetPrice + GetCreditOffset())
                 return true;
             else
                 return false;
@@ -291,22 +353,12 @@ namespace StrategyRunner
 
         private void HedgeLeftovers(HedgeReason reason)
         {
-            int volume = pendingBuys - pendingSells;
-            if (volume == 0)
-            {
-                return;
-            }
-
             foreach (var deal in pendingOrders)
             {
                 orders.CancelOrder(deal.Key);
             }
 
-            Log(String.Format("BV: hedging leftovers, volume={0}, reason={1}", volume, reason));
-            hedging.Hedge(pendingBuys - pendingSells, Source.NEAR);
-            pendingBuys = 0;
-            pendingSells = 0;
-            cashflow = 0;
+            hedging.Hedge();
         }
 
         private void OnTimeout(object sender, ElapsedEventArgs e)
@@ -322,10 +374,10 @@ namespace StrategyRunner
                 BVSellPrice = bids[quoteIndex].price;
                 BVBuyPrice = asks[quoteFarIndex].price;
 
-                if (GetQuotedPosition() < -P.bvMaxOutstandingOutrights)
+                if (GetQuotedPosition() < -GetBvMaxOutstandingOutrights())
                     return;
 
-                if (holding[leanIndex] > P.maxOutrights)
+                if (holding[leanIndex] > GetMaxOutrights())
                     return;
 
                 timeout.Stop();
@@ -339,7 +391,7 @@ namespace StrategyRunner
                     return;
                 }
 
-                if (Math.Abs(holding[quoteIndex] - volume) > P.maxOutrights || Math.Abs(holding[quoteFarIndex] + volume) > P.maxOutrights)
+                if (Math.Abs(holding[quoteIndex] - volume) > GetMaxOutrights() || Math.Abs(holding[quoteFarIndex] + volume) > GetMaxOutrights())
                 {
                     return;
                 }
@@ -361,9 +413,6 @@ namespace StrategyRunner
                     int orderId = Buy(volume, "BV", BVBuyIndex, BVBuyPrice);
                     pendingTrades[BVBuyIndex] = -volume;
                 }
-
-                pendingBuys += volume;
-                pendingSells += volume;
             }
 
             if (asks[quoteIndex].price <= bids[quoteFarIndex].price)
@@ -371,24 +420,24 @@ namespace StrategyRunner
                 BVSellPrice = bids[quoteFarIndex].price;
                 BVBuyPrice = asks[quoteIndex].price;
 
-                if (GetQuotedPosition() > P.bvMaxOutstandingOutrights)
+                if (GetQuotedPosition() > GetBvMaxOutstandingOutrights())
                     return;
 
-                if (holding[leanIndex] < -P.maxOutrights)
+                if (holding[leanIndex] < -GetMaxOutrights())
                     return;
 
                 timeout.Stop();
                 timeout.Start();
 
                 int availableVolume = Math.Min(API.GetAsk(nearInstrument).qty, API.GetBid(farInstrument).qty);
-                int volume = Math.Min(availableVolume, P.maxCrossVolume);
+                int volume = Math.Min(availableVolume, GetMaxCrossVolume());
 
                 if (volume == 0)
                 {
                     return;
                 }
 
-                if (Math.Abs(holding[quoteFarIndex] + volume) > P.maxOutrights || Math.Abs(holding[quoteIndex] - volume) > P.maxOutrights)
+                if (Math.Abs(holding[quoteFarIndex] + volume) > GetMaxOutrights() || Math.Abs(holding[quoteIndex] - volume) > GetMaxOutrights())
                 {
                     return;
                 }
@@ -410,9 +459,6 @@ namespace StrategyRunner
                     int orderId = Sell(volume, "BV", BVSellIndex, BVSellPrice);
                     pendingTrades[BVSellIndex] = volume;
                 }
-
-                pendingBuys += volume;
-                pendingSells += volume;
             }
         }
 
@@ -426,26 +472,26 @@ namespace StrategyRunner
             int ordId;
             if (isBuyPreferred(bids[quoteIndex].price) && (bids[quoteFarIndex].price <= bids[quoteIndex].price))
             {
-                if ((GetQuotedPosition() > -P.bvMaxOutstandingOutrights) && (holding[leanIndex] > -P.maxOutrights) && (!orders.orderInUse(limitBuyFar)))
+                if ((GetQuotedPosition() > -GetBvMaxOutstandingOutrights()) && (holding[leanIndex] > -GetMaxOutrights()) && (!orders.orderInUse(limitBuyFar)))
                 {
                     limitBVBuyPrice = bids[quoteIndex].price;
                     limitBVBuyIndex = quoteFarIndex;
                     limitBVSellIndex = quoteIndex;
                     
-                    int volume = Math.Min(bids[quoteIndex].qty / 2, P.maxCrossVolume);
+                    int volume = Math.Min(bids[quoteIndex].qty / 2, GetMaxCrossVolume());
                     if (volume > 0)
                         ordId = orders.SendOrder(limitBuyFar, limitBVBuyIndex, Side.BUY, limitBVBuyPrice, volume, "LIMIT_BV");
                 }
             }
             if (isSellPreferred(asks[quoteIndex].price) && (asks[quoteFarIndex].price >= asks[quoteIndex].price))
             {
-                if ((GetQuotedPosition() < P.bvMaxOutstandingOutrights) && (holding[leanIndex] < P.maxOutrights) && (!orders.orderInUse(limitSellFar)))
+                if ((GetQuotedPosition() < P.bvMaxOutstandingOutrights) && (holding[leanIndex] < GetMaxOutrights()) && (!orders.orderInUse(limitSellFar)))
                 {
                     limitBVSellPrice = asks[quoteIndex].price;
                     limitBVSellIndex = quoteFarIndex;
                     limitBVBuyIndex = quoteIndex;
 
-                    int volume = Math.Min(asks[quoteIndex].qty / 2, P.maxCrossVolume);
+                    int volume = Math.Min(asks[quoteIndex].qty / 2, GetMaxCrossVolume());
                     if (volume > 0)
                         ordId = orders.SendOrder(limitSellFar, limitBVSellIndex, Side.SELL, limitBVSellPrice, volume, "LIMIT_BV");
                 }
@@ -469,16 +515,6 @@ namespace StrategyRunner
 
                 bids[instrumentIndex] = API.GetBid(vi);
                 asks[instrumentIndex] = API.GetAsk(vi);
-                double theo = API.GetImprovedCM(instrumentIndex);
-
-                positionValue = (pendingSells - pendingBuys) * theo;
-                pnl = (cashflow + positionValue) * 2500;
-
-                if (pnl < -P.bvMaxLoss)
-                {
-                    HedgeLeftovers(HedgeReason.PNL_DROP);
-                    return;
-                }
 
                 if (!API.PassedTradeStart())
                 {
@@ -498,7 +534,7 @@ namespace StrategyRunner
                 if (GetNetPosition() != 0)
                     return;
 
-                if (P.bvEnabled && pendingBuys == 0 && pendingSells == 0)
+                if (P.bvEnabled && (holding[quoteIndex] + holding[quoteFarIndex] + holding[leanIndex] == 0) && pendingTrades.Count == 0 && !orders.orderInUse(buy) && !orders.orderInUse(sell))
                 {
                     TakeCross();
                 }
@@ -515,14 +551,16 @@ namespace StrategyRunner
             }
         }
 
-        public override void OnParamsUpdate()
+        public override void OnParamsUpdate(string paramName, string paramValue)
         {
-            bvThrottler.updateMaxVolume(P.bvThrottleVolume);
-            bvThrottler.updateTimespan(P.bvThrottleSeconds);
+            SetValue(paramName, paramValue);
 
-            if (P.bvTimeoutSeconds > 0)
+            bvThrottler.updateMaxVolume(GetBvThrottleVolume());
+            bvThrottler.updateTimespan(GetBvThrottleSeconds());
+
+            if (GetBvTimeoutSeconds() > 0)
             {
-                timeout.Interval = P.bvTimeoutSeconds * 1000;
+                timeout.Interval = GetBvTimeoutSeconds() * 1000;
             }
         }
 
@@ -530,12 +568,24 @@ namespace StrategyRunner
         {
             if (pendingTrades.ContainsKey(instrumentIndex))
             {
-                int volume = pendingTrades[instrumentIndex];
+                int amount = pendingTrades[instrumentIndex];
 
-                if (volume > 0)
-                    Buy(volume, "BV", BVBuyIndex, BVBuyPrice);
-                else if (volume < 0)
-                    Sell(-volume, "BV", BVSellIndex, BVSellPrice);
+                if (amount > 0)
+                {
+                    int orderId = Buy(amount, "BV", BVBuyIndex, BVBuyPrice);
+                    if (orderId == -1)
+                    {
+                        pendingResubmissions[buy.internalOrderNumber] = amount;
+                    }
+                }
+                else if (amount < 0)
+                {
+                    int orderId = Sell(-amount, "BV", BVSellIndex, BVSellPrice);
+                    if (orderId == -1)
+                    {
+                        pendingResubmissions[sell.internalOrderNumber] = amount;
+                    }
+                }
 
                 pendingTrades.Remove(instrumentIndex);
             }
@@ -547,13 +597,19 @@ namespace StrategyRunner
             timeout.Start();
             if (amount < 0)
             {
-                Buy(-amount, "ON_LIMIT_BV", limitBVBuyIndex, limitBVSellPrice);
-                pendingBuys += -amount;
+                int orderId = Buy(-amount, "ON_LIMIT_BV", limitBVBuyIndex, limitBVSellPrice);
+                if (orderId == -1)
+                {
+                    pendingResubmissions[buy.internalOrderNumber] = amount;
+                }
             }
             else if (amount > 0)
             {
-                Sell(amount, "ON_LIMIT_BV", limitBVSellIndex, limitBVBuyPrice);
-                pendingSells += amount;
+                int orderId = Sell(amount, "ON_LIMIT_BV", limitBVSellIndex, limitBVBuyPrice);
+                if (orderId == -1)
+                {
+                    pendingResubmissions[sell.internalOrderNumber] = amount;
+                }
             }
         }
 
@@ -579,23 +635,13 @@ namespace StrategyRunner
 
                 holding[instrumentIndex] += amount;
 
-                cashflow += amount * deal.price * -1;
+                hedging.PropagateToStopOrder(deal.internalOrderNumber);
+                hedging.ManagePendingOrders(deal);
 
                 CheckPending(instrumentIndex);
 
                 if (deal.source != "LIMIT_BV")
-                {
-                    if (deal.isBuy)
-                    {
-                        pendingBuys -= deal.amount;
-                    }
-                    else
-                    {
-                        pendingSells -= deal.amount;
-                    }
-
                     return;
-                }
 
                 ExecuteOtherLegAtMarket(instrumentIndex, amount);
             }
@@ -614,11 +660,82 @@ namespace StrategyRunner
         {
             API.Log(String.Format("OnOrder: int={0} status={1} sec={2} stg={3} ask_size={4} bid_size={5}", ord.internalOrderNumber, ord.orderStatus, ord.securityNumber, ord.stgID, ord.askSize, ord.bidSize));
 
-            if (ord.orderStatus == 9)
+            hedging.OnOrder(ord);
+
+            if (!orders.orderInTransientState(ord))
             {
-                CancelStrategy(String.Format("order {0} rejected", ord.internalOrderNumber));
-                return;
+                orders.OnOrder(ord);
             }
+
+            if (pendingResubmissions.ContainsKey(ord.internalOrderNumber))
+            {
+                int size = pendingResubmissions[ord.internalOrderNumber];
+                pendingResubmissions.Remove(ord.internalOrderNumber);
+
+                if (size < 0)
+                {
+                    Buy(-size, "RETRY", ord.index, ord.ask);
+                }
+                else if (size > 0)
+                {
+                    Sell(size, "RETRY", ord.index, ord.bid);
+                }
+            }
+        }
+
+        public static (bool, string) SetValue(string paramName, string paramValue)
+        {
+            string ret = "";
+            bool found = false;
+            bool valueChanged = false;
+            foreach (FieldInfo field in typeof(BV).GetFields())
+            {
+                if (field.Name != paramName)
+                    continue;
+                else
+                {
+                    found = true;
+                    if (field.FieldType == typeof(int))
+                    {
+                        int val = Int32.Parse(paramValue);
+                        valueChanged = val != (int)field.GetValue(null);
+                        field.SetValue(null, val);
+                    }
+                    else if (field.FieldType == typeof(string))
+                    {
+                        valueChanged = paramValue != (string)field.GetValue(null);
+                        field.SetValue(null, paramValue);
+                    }
+                    else if (field.FieldType == typeof(double))
+                    {
+                        double val = Double.Parse(paramValue);
+                        valueChanged = val != (double)field.GetValue(null);
+                        field.SetValue(null, val);
+                    }
+                    else if (field.FieldType == typeof(bool))
+                    {
+                        if (paramValue == "true")
+                        {
+                            valueChanged = !(bool)field.GetValue(null);
+                            field.SetValue(null, true);
+                        }
+                        else
+                        {
+                            valueChanged = (bool)field.GetValue(null);
+                            field.SetValue(null, false);
+                        }
+                    }
+                    else if (field.FieldType == typeof(long))
+                    {
+                        long val = long.Parse(paramValue);
+                        valueChanged = val != (long)field.GetValue(null);
+                        field.SetValue(null, val);
+                    }
+                    break;
+                } //end else
+            } // end foreach
+
+            return (valueChanged, ret);
         }
     }
 }

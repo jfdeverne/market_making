@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using KGClasses;
 using System.Xml;
+using System.Reflection;
 
 namespace StrategyRunner
 {
@@ -96,6 +97,11 @@ namespace StrategyRunner
 
         Throttler.Throttler throttler;
 
+        public static double joinFactor = -1;
+        public static double joinFactorAllVenues = -1;
+        public static int quoteThrottleSeconds = -1;
+        public static int quoteThrottleVolume = -1;
+
         public Quoter(API api, string configFile)
         {
             try
@@ -182,8 +188,8 @@ namespace StrategyRunner
                 hedging = new Hedging(this);
                 baseSpreads = new BaseSpreads(this);
 
-                TimeSpan t = new TimeSpan(0, 0, 0, 0, P.quoteThrottleSeconds * 1000);
-                throttler = new Throttler.Throttler(P.quoteThrottleVolume, t);
+                TimeSpan t = new TimeSpan(0, 0, 0, 0, GetQuoteThrottleSeconds() * 1000);
+                throttler = new Throttler.Throttler(GetQuoteThrottleVolume(), t);
 
                 API.Log("-->Start strategy:");
                 API.StartStrategy(ref stgID, strategyOrders, instruments, 0);
@@ -194,6 +200,34 @@ namespace StrategyRunner
             {
                 API.Log("ERR: " + e.ToString() + "," + e.StackTrace);
             }
+        }
+
+        private double GetJoinFactor()
+        {
+            if (joinFactor == -1)
+                return P.joinFactor;
+            return joinFactor;
+        }
+
+        private double GetJoinFactorAllVenues()
+        {
+            if (joinFactorAllVenues == -1)
+                return P.joinFactorAllVenues;
+            return joinFactorAllVenues;
+        }
+
+        private int GetQuoteThrottleSeconds()
+        {
+            if (quoteThrottleSeconds == -1)
+                return P.quoteThrottleSeconds;
+            return quoteThrottleSeconds;
+        }
+
+        private int GetQuoteThrottleVolume()
+        {
+            if (quoteThrottleVolume == -1)
+                return P.quoteThrottleVolume;
+            return quoteThrottleVolume;
         }
 
         private static double RoundToNearestTick(double price, double tick)
@@ -307,7 +341,7 @@ namespace StrategyRunner
 
         private bool shouldQuote(VI viLean)
         {
-            if (P.joinFactor == 0)
+            if (GetJoinFactor() == 0)
             {
                 return true;
             }
@@ -329,7 +363,7 @@ namespace StrategyRunner
                 askVolume += askDepth[levelIndex].qty;
             }
 
-            if (bidVolume < config.size * P.joinFactor || askVolume < config.size * P.joinFactor)
+            if (bidVolume < config.size * GetJoinFactor() || askVolume < config.size * GetJoinFactor())
             {
                 return false;
             }
@@ -351,7 +385,7 @@ namespace StrategyRunner
             for (int levelIndex = 0; levelIndex < 5; ++levelIndex)
             {
                 cumulativeBidSize += bidDepth[levelIndex].qty;
-                if (cumulativeBidSize >= config.size * P.joinFactor) 
+                if (cumulativeBidSize >= config.size * GetJoinFactor()) 
                 {
                     bid = bidDepth[levelIndex].price;
                     break;
@@ -362,7 +396,7 @@ namespace StrategyRunner
             for (int levelIndex = 0; levelIndex < 5; ++levelIndex)
             {
                 cumulativeAskSize += askDepth[levelIndex].qty;
-                if (cumulativeAskSize >= config.size * P.joinFactor)
+                if (cumulativeAskSize >= config.size * GetJoinFactor())
                 {
                     ask = askDepth[levelIndex].price;
                     break;
@@ -419,7 +453,7 @@ namespace StrategyRunner
                         if (levelIndexFar < 5)
                             levelIndexFar++;
                     }
-                    if ((cumulativeBidSize >= config.size * P.joinFactor) | (cumulativeBidSize + cumulativeBidSizeFar >= config.size * P.joinFactorAllVenues))
+                    if ((cumulativeBidSize >= config.size * GetJoinFactor()) | (cumulativeBidSize + cumulativeBidSizeFar >= config.size * GetJoinFactorAllVenues()))
                     {
                         bid = lastBid;
                         reachedSizeTH = true;
@@ -455,7 +489,7 @@ namespace StrategyRunner
                         if (levelIndexFar < 5)
                             levelIndexFar++;
                     }
-                    if ((cumulativeAskSize >= config.size * P.joinFactor) | (cumulativeAskSize + cumulativeAskSizeFar >= config.size * P.joinFactorAllVenues))
+                    if ((cumulativeAskSize >= config.size * P.joinFactor) | (cumulativeAskSize + cumulativeAskSizeFar >= config.size * GetJoinFactorAllVenues()))
                     {
                         ask = lastAsk;
                         reachedSizeTH = true;
@@ -683,8 +717,11 @@ namespace StrategyRunner
             }
         }
 
-        public override void OnParamsUpdate()
+        public override void OnParamsUpdate(string paramName, string paramValue)
         {
+            SetValue(paramName, paramValue);
+            throttler.updateTimespan(GetQuoteThrottleSeconds());
+            throttler.updateMaxVolume(GetQuoteThrottleVolume());
             baseSpreads.OnUpdatedParams();
         }
 
@@ -707,10 +744,7 @@ namespace StrategyRunner
                 baseSpreads.ManagePendingOrders(deal);
                 baseSpreads.GetPosition();
 
-                if (deal.source == "MM" && instrumentIndex == quoteIndex)
-                {
-                    hedging.Hedge(-amount, Source.NEAR);
-                }
+                hedging.Hedge();
             }
             catch (Exception e)
             {
@@ -727,16 +761,67 @@ namespace StrategyRunner
         {
             API.Log(String.Format("OnOrder: int={0} status={1} sec={2} stg={3} ask_size={4} bid_size={5}", ord.internalOrderNumber, ord.orderStatus, ord.securityNumber, ord.stgID, ord.askSize, ord.bidSize));
 
-            if (ord.orderStatus == 9)
-            {
-                CancelStrategy(String.Format("order {0} rejected", ord.internalOrderNumber));
-                return;
-            }
+            hedging.OnOrder(ord);
 
-            if (!orders.orderInTransientState(ord) && ord.bidSize < 0 && ord.askSize < 0)
+            if (!orders.orderInTransientState(ord))
             {
-                hedging.OnOrder(ord);
+                orders.OnOrder(ord);
             }
+        }
+
+        public static (bool, string) SetValue(string paramName, string paramValue)
+        {
+            string ret = "";
+            bool found = false;
+            bool valueChanged = false;
+            foreach (FieldInfo field in typeof(Quoter).GetFields())
+            {
+                if (field.Name != paramName)
+                    continue;
+                else
+                {
+                    found = true;
+                    if (field.FieldType == typeof(int))
+                    {
+                        int val = Int32.Parse(paramValue);
+                        valueChanged = val != (int)field.GetValue(null);
+                        field.SetValue(null, val);
+                    }
+                    else if (field.FieldType == typeof(string))
+                    {
+                        valueChanged = paramValue != (string)field.GetValue(null);
+                        field.SetValue(null, paramValue);
+                    }
+                    else if (field.FieldType == typeof(double))
+                    {
+                        double val = Double.Parse(paramValue);
+                        valueChanged = val != (double)field.GetValue(null);
+                        field.SetValue(null, val);
+                    }
+                    else if (field.FieldType == typeof(bool))
+                    {
+                        if (paramValue == "true")
+                        {
+                            valueChanged = !(bool)field.GetValue(null);
+                            field.SetValue(null, true);
+                        }
+                        else
+                        {
+                            valueChanged = (bool)field.GetValue(null);
+                            field.SetValue(null, false);
+                        }
+                    }
+                    else if (field.FieldType == typeof(long))
+                    {
+                        long val = long.Parse(paramValue);
+                        valueChanged = val != (long)field.GetValue(null);
+                        field.SetValue(null, val);
+                    }
+                    break;
+                } //end else
+            } // end foreach
+
+            return (valueChanged, ret);
         }
     }
 }

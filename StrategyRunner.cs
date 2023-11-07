@@ -191,16 +191,22 @@ namespace StrategyRunner
         {
             int sInd = paramName.IndexOf('.') - 1;
             int strategyIndex = Int32.Parse(paramName.Substring(1, sInd));
+
+            if (strategyIndex == 0)
+            {
+                paramName = paramName.Substring(sInd + 2);
+                P.SetValue(paramName, paramVal);
+                return;
+            }
+
             if (!strategies.ContainsKey(strategyIndex))
             {
                 API.SendToRemote("[Variable ERR:" + paramName + "] strategy index doesnt exist", KGConstants.EVENT_ERROR);
                 return;
             }
-            paramName = paramName.Substring(sInd + 2);
-            P.SetValue(paramName, paramVal);
 
-            foreach (var strategy in strategies.Values)
-                strategy.OnParamsUpdate();
+            paramName = paramName.Substring(sInd + 2);
+            strategies[strategyIndex].OnParamsUpdate(paramName, paramVal);
 
             API.Log("Setting parameter value:" + paramName + "," + paramVal);
         }
@@ -386,13 +392,12 @@ namespace StrategyRunner
                     quoteFarIndices.Add(s.quoteFarIndex);
                     leanIndices.Add(s.leanIndex);
                     strategies[s.stgID].linkedBoxIndex = ii; //LINKING THE RELEVANT BOX ENTRY IN THE boxes ARRAYS
+                    //API.SetBoxTargetPrice(s.stgID, s.boxTargetPrice); //TODO: uncomment this with the new lib
                     ii++;
                 }
             }
 
             NBoxes = quoteIndices.Count;
-            //firstOutright = API.GetSecurityIndex(P.firstContract, 0);
-            //firstIndex = API.GetSecurityIndex(P.firstContract + "_DBFLY", 0);
             boxHoldings = new Matrix(NBoxes, 1);
             boxIndices = new int[4]; //leg1, leg2 of 1st calendar spread, then leg1 and leg2 of the 2nd cal spread
             outrightIndices = new int[2 * (NBoxes + 1)];

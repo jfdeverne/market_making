@@ -13,7 +13,7 @@ namespace StrategyRunner
         public abstract void OnOrder(KGOrder ord);
         public abstract void OnProcessMD(VIT vi);
         public abstract void OnDeal(KGDeal deal);
-        public abstract void OnParamsUpdate();
+        public abstract void OnParamsUpdate(string paramName, string paramValue);
 
         public int quoteIndex;
         public int quoteFarIndex;

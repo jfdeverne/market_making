@@ -3,16 +3,9 @@ using System.Text.RegularExpressions;
 using System.Reflection;
 
 namespace StrategyRunner
-{   
+{
     public static class P
     {
-        public static double eus1 = 0;
-        public static double eus2 = 0;
-        public static double eus3 = 0;
-        public static double eus4 = 0;
-        public static double eus5 = 0;
-        public static double eus6 = 0;
-
         public static int maxTradeSize = 0;
 
         public static int maxOutrights = 0;
