@@ -253,7 +253,7 @@ namespace StrategyRunner
 
         public void GetPosition()
         {
-            int ownPosition = mQuoter.holding[mQuoter.quoteIndex] + mQuoter.holding[mQuoter.quoteFarIndex];
+            int ownPosition = mQuoter.holding[mQuoter.quoteIndex] + mQuoter.holding[mQuoter.farIndex];
 
             int icsPosition = 0;
             if (mQuoter.icsIndex != -1)

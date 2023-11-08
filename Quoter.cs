@@ -14,49 +14,23 @@ namespace StrategyRunner
         public int size;
         public string leanInstrument;
         public string quoteInstrument;
-        public string quoteFarInstrument;
+        public string farInstrument;
         public string icsInstrument;
         public bool asymmetricQuoting = false;
         public double defaultBaseSpread;
         public int limitPlusSize = 200;
 
-        public QuoterConfig(string file, API api)
+        public QuoterConfig(double width, int size, string leanInstrument, string quoteInstrument, string farInstrument, string icsInstrument, bool asymmetricQuoting, double defaultBaseSpread, int limitPlusSize)
         {
-            try
-            {
-                api.Log("-->Config");
-                XmlDocument doc = new XmlDocument();
-                doc.Load(file);
-                api.Log("AfterLoad");
-                width = Double.Parse(doc.DocumentElement.SelectSingleNode("/strategyRunner/width").InnerText);
-                size = Int32.Parse(doc.DocumentElement.SelectSingleNode("/strategyRunner/size").InnerText);
-                leanInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/leanInstrument").InnerText;
-                quoteInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/quoteInstrument").InnerText;
-                limitPlusSize = Int32.Parse(doc.DocumentElement.SelectSingleNode("/strategyRunner/limitPlusSize").InnerText);
-                defaultBaseSpread = Double.Parse(doc.DocumentElement.SelectSingleNode("/strategyRunner/defaultBaseSpread").InnerText);
-
-                if (doc.DocumentElement.ChildNodes.Count > 4)
-                    quoteFarInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/farInstrument").InnerText;
-
-                if (doc.DocumentElement.ChildNodes.Count > 5)
-                    icsInstrument = doc.DocumentElement.SelectSingleNode("/strategyRunner/ics").InnerText;
-
-                if (doc.DocumentElement.ChildNodes.Count > 6)
-                {
-                    string asymmetricQuotingString = doc.DocumentElement.SelectSingleNode("/strategyRunner/asymmetricQuoting").InnerText;
-                    if (asymmetricQuotingString == "true")
-                    {
-                        asymmetricQuoting = true;
-                    }
-                }
-
-                api.Log(String.Format("config xml={0}", doc.OuterXml));
-                api.Log("<--Config");
-            }
-            catch (Exception e)
-            {
-                api.Log("ERR: " + e.ToString() + "," + e.StackTrace);
-            }
+            this.width = width;
+            this.size = size;
+            this.leanInstrument = leanInstrument;
+            this.quoteInstrument = quoteInstrument;
+            this.farInstrument = farInstrument;
+            this.icsInstrument = icsInstrument;
+            this.asymmetricQuoting = asymmetricQuoting;
+            this.defaultBaseSpread = defaultBaseSpread;
+            this.limitPlusSize = limitPlusSize;
         }
     }
 
@@ -71,14 +45,12 @@ namespace StrategyRunner
 
         public int icsIndex;
 
-        public double tickSize;
-
         public int numAllInstruments;
         public int numInstrumentsInVenue;
 
         VI leanInstrument;
         VI quoteInstrument;
-        VI quoteFarInstrument;
+        VI farInstrument;
         VI icsInstrument;
 
         KGOrder buy;
@@ -102,12 +74,14 @@ namespace StrategyRunner
         public static int quoteThrottleSeconds = -1;
         public static int quoteThrottleVolume = -1;
 
-        public Quoter(API api, string configFile)
+        public Quoter(API api, QuoterConfig config)
         {
             try
             {
+                this.config = config;
+
                 API = api;
-                API.Log("-->strategy:" + configFile);
+                API.Log("-->strategy:" + config.quoteInstrument);
 
                 numAllInstruments = API.N;
                 numInstrumentsInVenue = API.n;
@@ -123,8 +97,6 @@ namespace StrategyRunner
                     asks[i] = new DepthElement(11111, 0);
                 }
 
-                config = new QuoterConfig(configFile, api);
-
                 limitPlusSize = config.limitPlusSize;
                 boxTargetPrice = config.defaultBaseSpread;
 
@@ -133,10 +105,10 @@ namespace StrategyRunner
                 leanIndex = API.GetSecurityIndex(config.leanInstrument);
                 quoteIndex = API.GetSecurityIndex(config.quoteInstrument);
 
-                if (config.quoteFarInstrument != null)
-                    quoteFarIndex = API.GetSecurityIndex(config.quoteFarInstrument);
+                if (config.farInstrument != null)
+                    farIndex = API.GetSecurityIndex(config.farInstrument);
                 else
-                    quoteFarIndex = -1;
+                    farIndex = -1;
 
                 if (config.icsInstrument != null)
                     icsIndex = API.GetSecurityIndex(config.icsInstrument);
@@ -165,12 +137,12 @@ namespace StrategyRunner
                     instruments.Add(icsInstrument);
                 }
 
-                if (quoteFarIndex != -1)
+                if (farIndex != -1)
                 {
-                    int quoteFarVenue = quoteFarIndex / numInstrumentsInVenue;
-                    int quoteFarIndexGlobal = quoteFarIndex % numInstrumentsInVenue;
-                    quoteFarInstrument = new VI(quoteFarVenue, quoteFarIndexGlobal);
-                    instruments.Add(quoteFarInstrument);
+                    int farVenue = farIndex / numInstrumentsInVenue;
+                    int farIndexGlobal = farIndex % numInstrumentsInVenue;
+                    farInstrument = new VI(farVenue, farIndexGlobal);
+                    instruments.Add(farInstrument);
                 }
 
                 strategyOrders = new List<KGOrder>();
@@ -192,7 +164,7 @@ namespace StrategyRunner
                 throttler = new Throttler.Throttler(GetQuoteThrottleVolume(), t);
 
                 API.Log("-->Start strategy:");
-                API.StartStrategy(ref stgID, strategyOrders, instruments, 0);
+                API.StartStrategy(ref stgID, strategyOrders, instruments, 0, 4);
 
                 API.Log("<--strategy");
             }
@@ -548,6 +520,8 @@ namespace StrategyRunner
         {
             try
             {
+                orders.OnProcessMD();
+
                 VI vi = new VI(vit.v, vit.i);
                 int instrumentIndex = vi.i + API.n * vi.v;
 
@@ -651,7 +625,7 @@ namespace StrategyRunner
                 double quoteTheo = theo + boxTargetPrice;
 
                 var (quoteBid, quoteAsk) = GetBidAsk(quoteTheo, tickSize, (config.width / 2.0), quoteIndex);
-                var (maxBid, minAsk) = getMinimumLonelinessConstrainedBidAsk(quoteInstrument, quoteFarInstrument);
+                var (maxBid, minAsk) = getMinimumLonelinessConstrainedBidAsk(quoteInstrument, farInstrument);
 
                 if (pricesAreEqual(maxBid, -11) || pricesAreEqual(minAsk, 11111))
                 {

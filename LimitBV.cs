@@ -8,43 +8,9 @@ using System.Xml;
 using System.Reflection;
 using System.Reflection.Emit;
 
-namespace Detail
-{
-    public enum Direction
-    {
-        NEUTRAL = 0,
-        BUY = 1,
-        SELL = 2
-    }
-
-    public enum HedgeReason
-    {
-        TIMEOUT = 0,
-        PNL_DROP = 1
-    }
-}
-
 namespace StrategyRunner
 {
-    public class BVConfig
-    {
-        public string nearInstrument;
-        public string farInstrument;
-        public string leanInstrument;
-        public int limitPlusSize;
-        public double defaultBaseSpread;
-
-        public BVConfig(string nearInstrument, string farInstrument, string leanInstrument, int limitPlusSize, double defaultBaseSpread)
-        {
-            this.nearInstrument = nearInstrument;
-            this.farInstrument = farInstrument;
-            this.leanInstrument = leanInstrument;
-            this.limitPlusSize = limitPlusSize;
-            this.defaultBaseSpread = defaultBaseSpread;
-        }
-    }
-
-    public class BV : Strategy
+    public class LimitBV : Strategy
     {
         private BVConfig config;
 
@@ -68,8 +34,11 @@ namespace StrategyRunner
         KGOrder buy;
         KGOrder sell;
 
-        KGOrder buyFar;
-        KGOrder sellFar;
+        KGOrder limitBuy;
+        KGOrder limitSell;
+
+        KGOrder limitBuyFar;
+        KGOrder limitSellFar;
 
         List<VI> instruments;
         Dictionary<int /*orderId*/, int /*amount*/> pendingOrders;
@@ -92,7 +61,7 @@ namespace StrategyRunner
         public static double bvTimeoutSeconds = -1;
         public static double bvMaxLoss = -1;
 
-        public BV(API api, BVConfig config)
+        public LimitBV(API api, BVConfig config)
         {
             try
             {
@@ -151,10 +120,14 @@ namespace StrategyRunner
                 sell = new KGOrder();
                 strategyOrders.Add(sell);
 
-                buyFar = new KGOrder();
-                strategyOrders.Add(buyFar);
-                sellFar = new KGOrder();
-                strategyOrders.Add(sellFar);
+                limitBuy = new KGOrder();
+                strategyOrders.Add(limitBuy);
+                limitSell = new KGOrder();
+                strategyOrders.Add(limitSell);
+                limitBuyFar = new KGOrder();
+                strategyOrders.Add(limitBuyFar);
+                limitSellFar = new KGOrder();
+                strategyOrders.Add(limitSellFar);
 
                 TimeSpan tBv = new TimeSpan(0, 0, 0, 0, GetBvThrottleSeconds() * 1000);
 
@@ -327,104 +300,48 @@ namespace StrategyRunner
             pendingTrades.Clear();
         }
 
-        private void TakeCross()
+        private bool pricesAreEqual(double price1, double price2)
         {
-            if (bids[quoteIndex].price >= asks[farIndex].price)
+            return Math.Abs(price1 - price2) < 1e-5;
+        }
+
+        private void SendLimitOrders()
+        {
+            int ordId;
+            if (isBuyPreferred(bids[quoteIndex].price) && (bids[farIndex].price <= bids[quoteIndex].price))
             {
-                BVSellPrice = bids[quoteIndex].price;
-                BVBuyPrice = asks[farIndex].price;
-
-                if (GetQuotedPosition() < -GetBvMaxOutstandingOutrights())
-                    return;
-
-                if (holding[leanIndex] > GetMaxOutrights())
-                    return;
-
-                timeout.Stop();
-                timeout.Start();
-
-                int availableVolume = Math.Min(API.GetBid(nearInstrument).qty, API.GetAsk(farInstrument).qty);
-                int volume = Math.Min(availableVolume, P.maxCrossVolume);
-
-                if (volume == 0)
+                if ((GetQuotedPosition() > -GetBvMaxOutstandingOutrights()) && (holding[leanIndex] > -GetMaxOutrights()) && (!orders.orderInUse(limitBuyFar)))
                 {
-                    return;
-                }
+                    limitBVBuyPrice = bids[quoteIndex].price;
+                    limitBVBuyIndex = farIndex;
+                    limitBVSellIndex = quoteIndex;
 
-                if (Math.Abs(holding[quoteIndex] - volume) > GetMaxOutrights() || Math.Abs(holding[farIndex] + volume) > GetMaxOutrights())
-                {
-                    return;
-                }
-
-                if (!bvThrottler.addTrade(volume))
-                    return;
-
-                if (isSellPreferred(BVSellPrice))
-                {
-                    BVSellIndex = quoteIndex;
-                    BVBuyIndex = farIndex;
-                    Sell(volume, "BV", BVSellIndex, BVSellPrice);
-                    Buy(volume, "BV", BVBuyIndex, BVBuyPrice);
-                }
-                else if (isBuyPreferred(BVBuyPrice))
-                {
-                    BVSellIndex = quoteIndex;
-                    BVBuyIndex = farIndex;
-                    int orderId = Buy(volume, "BV", BVBuyIndex, BVBuyPrice);
-                    pendingTrades[BVBuyIndex] = -volume;
+                    int volume = Math.Min(bids[quoteIndex].qty / 2, GetMaxCrossVolume());
+                    if (volume > 0)
+                        ordId = orders.SendOrder(limitBuyFar, limitBVBuyIndex, Side.BUY, limitBVBuyPrice, volume, "LIMIT_BV");
                 }
             }
-
-            if (asks[quoteIndex].price <= bids[farIndex].price)
+            if (isSellPreferred(asks[quoteIndex].price) && (asks[farIndex].price >= asks[quoteIndex].price))
             {
-                BVSellPrice = bids[farIndex].price;
-                BVBuyPrice = asks[quoteIndex].price;
-
-                if (GetQuotedPosition() > GetBvMaxOutstandingOutrights())
-                    return;
-
-                if (holding[leanIndex] < -GetMaxOutrights())
-                    return;
-
-                timeout.Stop();
-                timeout.Start();
-
-                int availableVolume = Math.Min(API.GetAsk(nearInstrument).qty, API.GetBid(farInstrument).qty);
-                int volume = Math.Min(availableVolume, GetMaxCrossVolume());
-
-                if (volume == 0)
+                if ((GetQuotedPosition() < P.bvMaxOutstandingOutrights) && (holding[leanIndex] < GetMaxOutrights()) && (!orders.orderInUse(limitSellFar)))
                 {
-                    return;
-                }
+                    limitBVSellPrice = asks[quoteIndex].price;
+                    limitBVSellIndex = farIndex;
+                    limitBVBuyIndex = quoteIndex;
 
-                if (Math.Abs(holding[farIndex] + volume) > GetMaxOutrights() || Math.Abs(holding[quoteIndex] - volume) > GetMaxOutrights())
-                {
-                    return;
-                }
-
-                if (!bvThrottler.addTrade(volume))
-                    return;
-
-                if (isBuyPreferred(BVBuyPrice))
-                {
-                    BVSellIndex = farIndex;
-                    BVBuyIndex = quoteIndex;
-                    Buy(volume, "BV", BVBuyIndex, BVBuyPrice);
-                    Sell(volume, "BV", BVSellIndex, BVSellPrice);
-                }
-                else if (isSellPreferred(BVSellPrice))
-                {
-                    BVSellIndex = farIndex;
-                    BVBuyIndex = quoteIndex;
-                    int orderId = Sell(volume, "BV", BVSellIndex, BVSellPrice);
-                    pendingTrades[BVSellIndex] = volume;
+                    int volume = Math.Min(asks[quoteIndex].qty / 2, GetMaxCrossVolume());
+                    if (volume > 0)
+                        ordId = orders.SendOrder(limitSellFar, limitBVSellIndex, Side.SELL, limitBVSellPrice, volume, "LIMIT_BV");
                 }
             }
         }
 
-        private bool pricesAreEqual(double price1, double price2)
+        private void CancelOnPriceMove(int instrumentIndex)
         {
-            return Math.Abs(price1 - price2) < 1e-5;
+            if ((!pricesAreEqual(limitBVBuyPrice, bids[quoteIndex].price)) && (orders.orderInUse(limitBuyFar)))
+                orders.CancelOrder(limitBuyFar);
+            else if ((!pricesAreEqual(limitBVSellPrice, asks[quoteIndex].price)) && (orders.orderInUse(limitSellFar)))
+                orders.CancelOrder(limitSellFar);
         }
 
         public override void OnProcessMD(VIT vit)
@@ -457,10 +374,8 @@ namespace StrategyRunner
                 if (GetNetPosition() != 0)
                     return;
 
-                if (holding[quoteIndex] + holding[farIndex] + holding[leanIndex] == 0 && pendingTrades.Count == 0 && !orders.orderInUse(buy) && !orders.orderInUse(sell))
-                {
-                    TakeCross();
-                }
+                SendLimitOrders();
+                CancelOnPriceMove(instrumentIndex);
             }
             catch (Exception e)
             {
@@ -481,32 +396,27 @@ namespace StrategyRunner
             }
         }
 
-        private void CheckPending(int instrumentIndex)
+        private void ExecuteOtherLegAtMarket(int instrumentIndex, int amount)
         {
-            if (pendingTrades.ContainsKey(instrumentIndex))
+            timeout.Stop();
+            timeout.Start();
+            if (amount < 0)
             {
-                int amount = pendingTrades[instrumentIndex];
-
-                if (amount > 0)
+                int orderId = Buy(-amount, "ON_LIMIT_BV", limitBVBuyIndex, limitBVSellPrice);
+                if (orderId == -1)
                 {
-                    int orderId = Buy(amount, "BV", BVBuyIndex, BVBuyPrice);
-                    if (orderId == -1)
-                    {
-                        pendingResubmissions[buy.internalOrderNumber] = amount;
-                    }
+                    pendingResubmissions[buy.internalOrderNumber] = amount;
                 }
-                else if (amount < 0)
-                {
-                    int orderId = Sell(-amount, "BV", BVSellIndex, BVSellPrice);
-                    if (orderId == -1)
-                    {
-                        pendingResubmissions[sell.internalOrderNumber] = amount;
-                    }
-                }
-
-                pendingTrades.Remove(instrumentIndex);
             }
-        }  
+            else if (amount > 0)
+            {
+                int orderId = Sell(amount, "ON_LIMIT_BV", limitBVSellIndex, limitBVBuyPrice);
+                if (orderId == -1)
+                {
+                    pendingResubmissions[sell.internalOrderNumber] = amount;
+                }
+            }
+        }
 
         public override void OnDeal(KGDeal deal)
         {
@@ -533,7 +443,10 @@ namespace StrategyRunner
                 hedging.PropagateToStopOrder(deal.internalOrderNumber);
                 hedging.ManagePendingOrders(deal);
 
-                CheckPending(instrumentIndex);
+                if (deal.source != "LIMIT_BV")
+                    return;
+
+                ExecuteOtherLegAtMarket(instrumentIndex, amount);
             }
             catch (Exception e)
             {

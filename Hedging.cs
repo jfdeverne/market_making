@@ -109,7 +109,6 @@ namespace StrategyRunner
             mIOCs = new List<int>();
             mIOCCancels = new List<int>();
 
-
             mOrders = mStrategy.orders;
         }
 
@@ -142,11 +141,11 @@ namespace StrategyRunner
                         bestOffer = mStrategy.asks[mStrategy.quoteIndex].price;
                         hedgeIndex = mStrategy.quoteIndex;
                     }
-                if (mStrategy.holding[mStrategy.quoteFarIndex] + quantity < P.maxOutrights)
-                    if (mStrategy.asks[mStrategy.quoteFarIndex].price < bestOffer)
+                if (mStrategy.holding[mStrategy.farIndex] + quantity < P.maxOutrights)
+                    if (mStrategy.asks[mStrategy.farIndex].price < bestOffer)
                     {
-                        bestOffer = mStrategy.asks[mStrategy.quoteFarIndex].price;
-                        hedgeIndex = mStrategy.quoteFarIndex;
+                        bestOffer = mStrategy.asks[mStrategy.farIndex].price;
+                        hedgeIndex = mStrategy.farIndex;
                     }
                 if (mStrategy.holding[mStrategy.leanIndex] + quantity < P.maxOutrights)
                     if (mStrategy.asks[mStrategy.leanIndex].price + mStrategy.boxTargetPrice < bestOffer)
@@ -163,11 +162,11 @@ namespace StrategyRunner
                         bestBid = mStrategy.bids[mStrategy.quoteIndex].price;
                         hedgeIndex = mStrategy.quoteIndex;
                     }
-                if (mStrategy.holding[mStrategy.quoteFarIndex] + quantity > -P.maxOutrights)
-                    if (mStrategy.bids[mStrategy.quoteFarIndex].price > bestBid)
+                if (mStrategy.holding[mStrategy.farIndex] + quantity > -P.maxOutrights)
+                    if (mStrategy.bids[mStrategy.farIndex].price > bestBid)
                     {
-                        bestBid = mStrategy.bids[mStrategy.quoteFarIndex].price;
-                        hedgeIndex = mStrategy.quoteFarIndex;
+                        bestBid = mStrategy.bids[mStrategy.farIndex].price;
+                        hedgeIndex = mStrategy.farIndex;
                     }
                 if (mStrategy.holding[mStrategy.leanIndex] + quantity > -P.maxOutrights)
                     if (mStrategy.bids[mStrategy.leanIndex].price + mStrategy.boxTargetPrice > bestBid)
@@ -565,13 +564,13 @@ namespace StrategyRunner
                     Hedge();
                 }
             }
-            else if (!mOrders.orderInTransientState(ord))
+            else if (!mOrders.orderInTransientState(ord) && ord.orderStatus != 4)
             {
                 if (mIOCs.Contains(ord.internalOrderNumber))
                 {
                     mIOCs.Remove(ord.internalOrderNumber);
                     mIOCCancels.Add(ord.internalOrderNumber);
-                    mOrders.CancelOrder(ord);
+                    mOrders.CancelOnNextMD(ord);
                 }
             }
             else if (ord.orderStatus == 41 && mIOCCancels.Contains(ord.internalOrderNumber))
@@ -604,7 +603,7 @@ namespace StrategyRunner
             }
 
             ManagePendingOrders(order.internalOrderNumber, n);
-            PostStopOrder(mStrategy.leanIndex, mStrategy.leanIndex, mStrategy.bids[mStrategy.leanIndex].price, mStrategy.asks[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.BUY, order.internalOrderNumber);
+            PostStopOrder(mStrategy.leanIndex, mStrategy.leanIndex, mStrategy.asks[mStrategy.leanIndex].price - mStrategy.tickSize, mStrategy.asks[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.BUY, order.internalOrderNumber);
         }
 
         private void LimitPlusSellLean(int n)
@@ -621,7 +620,7 @@ namespace StrategyRunner
             }
 
             ManagePendingOrders(order.internalOrderNumber, -n);
-            PostStopOrder(mStrategy.leanIndex, mStrategy.leanIndex, mStrategy.asks[mStrategy.leanIndex].price, mStrategy.bids[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.SELL, order.internalOrderNumber);
+            PostStopOrder(mStrategy.leanIndex, mStrategy.leanIndex, mStrategy.bids[mStrategy.leanIndex].price + mStrategy.tickSize, mStrategy.bids[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.SELL, order.internalOrderNumber);
         }
 
         private void LimitPlusBuyQuoted(int n)
@@ -638,14 +637,14 @@ namespace StrategyRunner
             }
 
             ManagePendingOrders(order.internalOrderNumber, n);
-            PostStopOrder(mStrategy.quoteIndex, mStrategy.leanIndex, mStrategy.bids[mStrategy.quoteIndex].price, mStrategy.asks[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.BUY, order.internalOrderNumber);
+            PostStopOrder(mStrategy.quoteIndex, mStrategy.leanIndex, mStrategy.asks[mStrategy.quoteIndex].price - mStrategy.tickSize, mStrategy.asks[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.BUY, order.internalOrderNumber);
         }
 
         private void LimitPlusBuyQuotedFar(int n)
         {
             var order = quotedFarBuy;
 
-            int orderId = mOrders.SendOrder(order, mStrategy.quoteFarIndex, Side.BUY, mStrategy.bids[mStrategy.quoteFarIndex].price, n, "HEDGE");
+            int orderId = mOrders.SendOrder(order, mStrategy.farIndex, Side.BUY, mStrategy.bids[mStrategy.farIndex].price, n, "HEDGE");
 
             if (orderId == -1)
             {
@@ -655,7 +654,7 @@ namespace StrategyRunner
             }
 
             ManagePendingOrders(order.internalOrderNumber, n);
-            PostStopOrder(mStrategy.quoteFarIndex, mStrategy.leanIndex, mStrategy.bids[mStrategy.quoteFarIndex].price, mStrategy.asks[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.BUY, order.internalOrderNumber);
+            PostStopOrder(mStrategy.farIndex, mStrategy.leanIndex, mStrategy.asks[mStrategy.farIndex].price - mStrategy.tickSize, mStrategy.asks[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.BUY, order.internalOrderNumber);
         }
 
         private void LimitPlusSellQuoted(int n)
@@ -672,14 +671,14 @@ namespace StrategyRunner
             }
 
             ManagePendingOrders(order.internalOrderNumber, -n);
-            PostStopOrder(mStrategy.quoteIndex, mStrategy.leanIndex, mStrategy.asks[mStrategy.quoteIndex].price, mStrategy.bids[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.SELL, order.internalOrderNumber);
+            PostStopOrder(mStrategy.quoteIndex, mStrategy.leanIndex, mStrategy.bids[mStrategy.quoteIndex].price + mStrategy.tickSize, mStrategy.bids[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.SELL, order.internalOrderNumber);
         }
 
         private void LimitPlusSellQuotedFar(int n)
         {
             var order = quotedFarSell;
 
-            int orderId = mOrders.SendOrder(order, mStrategy.quoteFarIndex, Side.SELL, mStrategy.asks[mStrategy.quoteFarIndex].price, n, "HEDGE");
+            int orderId = mOrders.SendOrder(order, mStrategy.farIndex, Side.SELL, mStrategy.asks[mStrategy.farIndex].price, n, "HEDGE");
 
             if (orderId == -1)
             {
@@ -689,7 +688,7 @@ namespace StrategyRunner
             }
 
             ManagePendingOrders(order.internalOrderNumber, -n);
-            PostStopOrder(mStrategy.quoteFarIndex, mStrategy.leanIndex, mStrategy.asks[mStrategy.quoteFarIndex].price, mStrategy.bids[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.SELL, order.internalOrderNumber);
+            PostStopOrder(mStrategy.farIndex, mStrategy.leanIndex, mStrategy.bids[mStrategy.farIndex].price + mStrategy.tickSize, mStrategy.bids[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.SELL, order.internalOrderNumber);
         }
 
         private int BuyLean(int n)
@@ -726,7 +725,7 @@ namespace StrategyRunner
 
         private int SellQuotedFar(int n)
         {
-            int orderId = mOrders.SendOrder(quotedFarSellMarket, mStrategy.quoteFarIndex, Side.SELL, mStrategy.bids[mStrategy.quoteFarIndex].price, n, "HEDGE");
+            int orderId = mOrders.SendOrder(quotedFarSellMarket, mStrategy.farIndex, Side.SELL, mStrategy.bids[mStrategy.farIndex].price, n, "HEDGE");
 
             ManagePendingOrders(orderId, -n);
             return orderId;
@@ -734,7 +733,7 @@ namespace StrategyRunner
 
         private int BuyQuotedFar(int n)
         {
-            int orderId = mOrders.SendOrder(quotedFarBuyMarket, mStrategy.quoteFarIndex, Side.BUY, mStrategy.asks[mStrategy.quoteFarIndex].price, n, "HEDGE");
+            int orderId = mOrders.SendOrder(quotedFarBuyMarket, mStrategy.farIndex, Side.BUY, mStrategy.asks[mStrategy.farIndex].price, n, "HEDGE");
 
             ManagePendingOrders(orderId, n);
             return orderId;
@@ -742,7 +741,7 @@ namespace StrategyRunner
 
         public void Hedge()
         {
-            int quantity = mStrategy.holding[mStrategy.quoteIndex] + mStrategy.holding[mStrategy.quoteFarIndex] + mStrategy.holding[mStrategy.leanIndex];
+            int quantity = mStrategy.holding[mStrategy.quoteIndex] + mStrategy.holding[mStrategy.farIndex] + mStrategy.holding[mStrategy.leanIndex];
             if (quantity == 0)
             {
                 CancelAllOrders();
@@ -764,7 +763,7 @@ namespace StrategyRunner
                 return;
             }
 
-            if (hedgeInstrument == mStrategy.quoteFarIndex)
+            if (hedgeInstrument == mStrategy.farIndex)
             {
                 if (quantity > 0)
                 {
@@ -816,7 +815,7 @@ namespace StrategyRunner
                 }
             }
 
-            if (hedgeInstrument == mStrategy.quoteFarIndex)
+            if (hedgeInstrument == mStrategy.farIndex)
             {
                 if (quantity < 0)
                 {
@@ -851,5 +850,4 @@ namespace StrategyRunner
             return -1;
         }
     }
-
 }

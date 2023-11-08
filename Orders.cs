@@ -9,10 +9,12 @@ namespace StrategyRunner
     {
         Strategy mStrategy;
         List<int /*internalOrderNumber*/> mPendingCancels;
+        List<KGOrder> mToCancel;
         public Orders(Strategy strategy)
         {
             mStrategy = strategy;
             mPendingCancels = new List<int>();
+            mToCancel = new List<KGOrder>();
         }
 
         private void Log(string message)
@@ -104,16 +106,29 @@ namespace StrategyRunner
         {
             if (mPendingCancels.Contains(ord.internalOrderNumber))
             {
-                if (ord.orderStatus == 9)
+                if (ord.orderStatus == 9 || ord.orderStatus == 4)
                 {
-                    mStrategy.API.Log(String.Format("STG {0}: cancel for order {1} rejected", mStrategy.stgID, ord.internalOrderNumber));
                     mPendingCancels.Remove(ord.internalOrderNumber);
                     return;
                 }
 
                 mStrategy.API.Log(String.Format("STG {0}: pending cancel retry for order {1}", mStrategy.stgID, ord.internalOrderNumber));
-                CancelOrder(ord);
+                CancelOnNextMD(ord);
                 mPendingCancels.Remove(ord.internalOrderNumber);
+            }
+        }
+
+        public void CancelOnNextMD(KGOrder order)
+        {
+            mToCancel.Add(order);
+        }
+
+        public void OnProcessMD()
+        {
+            foreach (var order in mToCancel)
+            {
+                CancelOrder(order);
+                mToCancel.Remove(order);
             }
         }
     }

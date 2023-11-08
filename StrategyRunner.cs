@@ -6,6 +6,7 @@ using StrategyLib;
 using System.IO;
 using System.Reflection;
 using Mapack;
+using System.Xml.Linq;
 
 namespace Detail
 {
@@ -363,36 +364,82 @@ namespace StrategyRunner
         private void API_OnConnect()
         {
             API.Log("Connected");
-            string pathQuoter = Directory.GetCurrentDirectory() + "/quoter_config";
-            var filesQuoter = Directory.GetFiles(pathQuoter, "*.xml", SearchOption.TopDirectoryOnly);
+            string pathQuoter = Directory.GetCurrentDirectory() + "/quoter.xml";
 
-            string pathBV = Directory.GetCurrentDirectory() + "/bv_config";
-            var filesBV = Directory.GetFiles(pathBV, "*.xml", SearchOption.TopDirectoryOnly);
+            var doc = XDocument.Load(pathQuoter);
+
+            foreach (var quoter in doc.Descendants("Quoter"))
+            {
+                QuoterConfig config = new QuoterConfig
+                (
+                    (double)quoter.Element("width"),
+                    (int)quoter.Element("size"),
+                    (string)quoter.Element("leanInstrument"),
+                    (string)quoter.Element("quoteInstrument"),
+                    (string)quoter.Element("farInstrument"),
+                    (string)quoter.Element("ics"),
+                    (bool)quoter.Element("asymmetricQuoting"),
+                    (double)quoter.Element("defaultBaseSpread"),
+                    (int)quoter.Element("limitPlusSize")
+                );
+                Strategy s = new Quoter(API, config);
+                strategies[s.stgID] = s;
+            }
+
+            string pathBV = Directory.GetCurrentDirectory() + "/bv.xml";
+            var docBV = XDocument.Load(pathBV);
 
             quoteIndices = new List<int>();
             quoteFarIndices = new List<int>();
             leanIndices = new List<int>();
             boxes = new List<Box>();
 
-            foreach (var file in filesQuoter)
-            {
-                Strategy s = new Quoter(API, file);
-                strategies[s.stgID] = s;
-            }
-
             int ii = 0;
-            foreach (var file in filesBV)
+
+            foreach (var bv in docBV.Descendants("BV"))
             {
-                Strategy s = new BV(API, file);
+                BVConfig config = new BVConfig
+                (
+                    (string)bv.Element("nearInstrument"),
+                    (string)bv.Element("farInstrument"),
+                    (string)bv.Element("leanInstrument"),
+                    (int)bv.Element("limitPlusSize"),
+                    (double)bv.Element("defaultBaseSpread")
+                );
+                Strategy s = new BV(API, config);
                 strategies[s.stgID] = s;
 
                 if (API.GetSecurityNumber(s.quoteIndex, 0).Length > 9) //NOT OUTRIGHT
                 {
                     quoteIndices.Add(s.quoteIndex);
-                    quoteFarIndices.Add(s.quoteFarIndex);
+                    quoteFarIndices.Add(s.farIndex);
                     leanIndices.Add(s.leanIndex);
                     strategies[s.stgID].linkedBoxIndex = ii; //LINKING THE RELEVANT BOX ENTRY IN THE boxes ARRAYS
-                    //API.SetBoxTargetPrice(s.stgID, s.boxTargetPrice); //TODO: uncomment this with the new lib
+                    API.SetBoxTargetPrice(s.stgID, s.boxTargetPrice);
+                    ii++;
+                }
+            }
+
+            foreach (var bv in docBV.Descendants("LimitBV"))
+            {
+                BVConfig config = new BVConfig
+                (
+                    (string)bv.Element("nearInstrument"),
+                    (string)bv.Element("farInstrument"),
+                    (string)bv.Element("leanInstrument"),
+                    (int)bv.Element("limitPlusSize"),
+                    (double)bv.Element("defaultBaseSpread")
+                );
+                Strategy s = new LimitBV(API, config);
+                strategies[s.stgID] = s;
+
+                if (API.GetSecurityNumber(s.quoteIndex, 0).Length > 9) //NOT OUTRIGHT
+                {
+                    quoteIndices.Add(s.quoteIndex);
+                    quoteFarIndices.Add(s.farIndex);
+                    leanIndices.Add(s.leanIndex);
+                    strategies[s.stgID].linkedBoxIndex = ii; //LINKING THE RELEVANT BOX ENTRY IN THE boxes ARRAYS
+                    API.SetBoxTargetPrice(s.stgID, s.boxTargetPrice);
                     ii++;
                 }
             }

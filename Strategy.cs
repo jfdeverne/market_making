@@ -16,7 +16,7 @@ namespace StrategyRunner
         public abstract void OnParamsUpdate(string paramName, string paramValue);
 
         public int quoteIndex;
-        public int quoteFarIndex;
+        public int farIndex;
         public int leanIndex;
         public double boxTargetPrice; //"BOX" REFERS TO (quoteIndex - leanIndex)
 
@@ -35,5 +35,7 @@ namespace StrategyRunner
         public int linkedBoxIndex = -1;
 
         public int limitPlusSize;
+
+        public double tickSize;
     }
 }
