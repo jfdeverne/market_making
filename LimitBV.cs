@@ -215,6 +215,10 @@ namespace StrategyRunner
             {
                 API.CancelAllOrders(stgID);
             }
+            if (status == 1)
+            {
+                hedging.Hedge();
+            }
         }
 
         public override void OnSystemTradingMode(ref char c)
@@ -245,9 +249,12 @@ namespace StrategyRunner
             API.SendToRemote(String.Format("CANCEL STG {0}: {1}", stgID, reason), KGConstants.EVENT_ERROR);
         }
 
-        private int GetNetPosition()
+        public override int GetNetPosition()
         {
-            return holding[quoteIndex] + holding[farIndex] + holding[leanIndex];
+            int netHolding = holding[quoteIndex] + holding[farIndex];
+            if (leanIndex != farIndex)
+                netHolding += holding[leanIndex];
+            return netHolding;
         }
 
         private int GetQuotedPosition()
@@ -372,7 +379,9 @@ namespace StrategyRunner
                 }
 
                 if (GetNetPosition() != 0)
+                {
                     return;
+                }
 
                 SendLimitOrders();
                 CancelOnPriceMove(instrumentIndex);

@@ -3,35 +3,21 @@ using StrategyLib;
 using System;
 using System.Collections.Generic;
 using KGClasses;
-using System.Xml;
 using System.Reflection;
 
 namespace StrategyRunner
 {
     public class QuoterConfig
     {
-        public double width;
-        public int size;
-        public string leanInstrument;
-        public string quoteInstrument;
-        public string farInstrument;
-        public string icsInstrument;
-        public bool asymmetricQuoting = false;
-        public double defaultBaseSpread;
-        public int limitPlusSize = 200;
-
-        public QuoterConfig(double width, int size, string leanInstrument, string quoteInstrument, string farInstrument, string icsInstrument, bool asymmetricQuoting, double defaultBaseSpread, int limitPlusSize)
-        {
-            this.width = width;
-            this.size = size;
-            this.leanInstrument = leanInstrument;
-            this.quoteInstrument = quoteInstrument;
-            this.farInstrument = farInstrument;
-            this.icsInstrument = icsInstrument;
-            this.asymmetricQuoting = asymmetricQuoting;
-            this.defaultBaseSpread = defaultBaseSpread;
-            this.limitPlusSize = limitPlusSize;
-        }
+        public double width { get; set; }
+        public int size { get; set; }
+        public string leanInstrument { get; set; }
+        public string quoteInstrument { get; set; }
+        public string farInstrument { get; set; }
+        public string icsInstrument { get; set; }
+        public bool? asymmetricQuoting { get; set; }
+        public double? defaultBaseSpread { get; set; }
+        public int? limitPlusSize { get; set; }
     }
 
     public class Quoter : Strategy
@@ -65,7 +51,6 @@ namespace StrategyRunner
         List<VI> instruments;
         
         public Hedging hedging;
-        BaseSpreads baseSpreads;
 
         Throttler.Throttler throttler;
 
@@ -97,8 +82,12 @@ namespace StrategyRunner
                     asks[i] = new DepthElement(11111, 0);
                 }
 
-                limitPlusSize = config.limitPlusSize;
-                boxTargetPrice = config.defaultBaseSpread;
+                if (config.limitPlusSize.HasValue)
+                    limitPlusSize = config.limitPlusSize.Value;
+                else
+                    limitPlusSize = 200;
+
+                //boxTargetPrice = config.defaultBaseSpread;
 
                 instruments = new List<VI>();
 
@@ -158,7 +147,6 @@ namespace StrategyRunner
 
                 orders = new Orders(this);
                 hedging = new Hedging(this);
-                baseSpreads = new BaseSpreads(this);
 
                 TimeSpan t = new TimeSpan(0, 0, 0, 0, GetQuoteThrottleSeconds() * 1000);
                 throttler = new Throttler.Throttler(GetQuoteThrottleVolume(), t);
@@ -311,73 +299,6 @@ namespace StrategyRunner
             return Math.Abs(price1 - price2) < 1e-5;
         }
 
-        private bool shouldQuote(VI viLean)
-        {
-            if (GetJoinFactor() == 0)
-            {
-                return true;
-            }
-
-            List<DepthElement> bidDepth = API.GetBidDepth(viLean);
-            List<DepthElement> askDepth = API.GetAskDepth(viLean);
-
-            int bidVolume = 0;
-            int askVolume = 0;
-
-            for (int levelIndex = 0; levelIndex < 5; ++levelIndex)
-            {
-                double width = askDepth[levelIndex].price - bidDepth[levelIndex].price;
-                if (width > config.width)
-                {
-                    break;
-                }
-                bidVolume += bidDepth[levelIndex].qty;
-                askVolume += askDepth[levelIndex].qty;
-            }
-
-            if (bidVolume < config.size * GetJoinFactor() || askVolume < config.size * GetJoinFactor())
-            {
-                return false;
-            }
-
-            return true;
-        }
-
-        private (double, double) getMinimumLonelinessConstrainedBidAsk(VI instrument) //IF THERE IS NO farInstrument
-        {
-            List<DepthElement> bidDepth = API.GetBidDepth(instrument);
-            List<DepthElement> askDepth = API.GetAskDepth(instrument);
-
-            int cumulativeBidSize = 0;
-            int cumulativeAskSize = 0;
-
-            double bid = -11;
-            double ask = 11111;
-
-            for (int levelIndex = 0; levelIndex < 5; ++levelIndex)
-            {
-                cumulativeBidSize += bidDepth[levelIndex].qty;
-                if (cumulativeBidSize >= config.size * GetJoinFactor()) 
-                {
-                    bid = bidDepth[levelIndex].price;
-                    break;
-                }
-            }
-
-
-            for (int levelIndex = 0; levelIndex < 5; ++levelIndex)
-            {
-                cumulativeAskSize += askDepth[levelIndex].qty;
-                if (cumulativeAskSize >= config.size * GetJoinFactor())
-                {
-                    ask = askDepth[levelIndex].price;
-                    break;
-                }
-            }
-
-            return (bid, ask);
-        }
-
         private (double, double) getMinimumLonelinessConstrainedBidAsk(VI instrument, VI farInstrument)
         {
             double bid = -11;
@@ -399,7 +320,7 @@ namespace StrategyRunner
                 double lastBid = bid;
                 double lastAsk = ask;
                 bool reachedSizeTH = false;
-                while (((levelIndex < 5) | (levelIndexFar < 5)) & !reachedSizeTH)
+                while (((levelIndex < 5) & (levelIndexFar < 5)) & !reachedSizeTH)
                 {
                     if (bidDepth[levelIndex].price > bidDepthFar[levelIndexFar].price)
                     {
@@ -435,7 +356,7 @@ namespace StrategyRunner
                 levelIndex = 0;
                 levelIndexFar = 0;
                 reachedSizeTH = false;
-                while (((levelIndex < 5) | (levelIndexFar < 5)) & !reachedSizeTH)
+                while (((levelIndex < 5) & (levelIndexFar < 5)) & !reachedSizeTH)
                 {
                     if (askDepth[levelIndex].price < askDepthFar[levelIndexFar].price)
                     {
@@ -453,7 +374,7 @@ namespace StrategyRunner
                     }
                     else //==
                     {
-                        lastBid = askDepth[levelIndex].price;
+                        lastBid = bidDepth[levelIndex].price;
                         cumulativeAskSize += askDepth[levelIndex].qty;
                         if (levelIndex < 5)
                             levelIndex++;
@@ -516,6 +437,14 @@ namespace StrategyRunner
             }
         }
 
+        public override int GetNetPosition()
+        {
+            int netHolding = holding[quoteIndex] + holding[farIndex];
+            if (leanIndex != farIndex)
+                netHolding += holding[leanIndex];
+            return netHolding;
+        }
+
         public override void OnProcessMD(VIT vit)
         {
             try
@@ -536,6 +465,9 @@ namespace StrategyRunner
                     return;
                 }
 
+                bids[quoteIndex] = API.GetBid(new VI(quoteIndex / API.n, quoteIndex % API.n));
+                asks[quoteIndex] = API.GetAsk(new VI(quoteIndex / API.n, quoteIndex % API.n));
+
                 maxBidSize = bids[instrumentIndex].qty > maxBidSize ? bids[instrumentIndex].qty : maxBidSize;
                 maxAskSize = asks[instrumentIndex].qty > maxAskSize ? asks[instrumentIndex].qty : maxAskSize;
 
@@ -554,11 +486,35 @@ namespace StrategyRunner
                     hedging.EvaluateStops();
                 }
 
-                baseSpreads.ManageBaseSpreads();
-
                 theo = API.GetImprovedCM(instrumentIndex);
 
-                bool quote = shouldQuote(vi) && !pricesAreEqual(theo, -11);
+                bool quote = !pricesAreEqual(theo, -11);
+                double quoteTheo = theo + boxTargetPrice;
+                //double quoteTheo = boxTargetPrice;
+
+                var (quoteBid, quoteAsk) = GetBidAsk(quoteTheo, tickSize, (config.width / 2.0), quoteIndex);
+                var (maxBid, minAsk) = getMinimumLonelinessConstrainedBidAsk(quoteInstrument, farInstrument);
+
+                if (pricesAreEqual(maxBid, -11) || pricesAreEqual(minAsk, 11111))
+                {
+                    quote = false;
+                }
+
+                if (P.joinFactor > 0)
+                {
+                    quoteBid = Math.Min(quoteBid, maxBid);
+                    quoteAsk = Math.Max(quoteAsk, minAsk);
+                }
+
+                if (quoteBid < -10 || quoteAsk > 1000)
+                {
+                    quote = false;
+                }
+
+                if (quoteAsk - quoteBid > config.width + 1e-9)
+                {
+                    quote = false;
+                }
 
                 if ((orders.orderInUse(buy) || orders.orderInUse(sell) || orders.orderInUse(buyFar) || orders.orderInUse(sellFar)) && !orders.orderInTransientState(buy) && !orders.orderInTransientState(sell) && !orders.orderInTransientState(buyFar) && !orders.orderInTransientState(sellFar))
                 {
@@ -622,39 +578,21 @@ namespace StrategyRunner
                     return;
                 }
 
-                double quoteTheo = theo + boxTargetPrice;
+                int netHolding = GetNetPosition();
 
-                var (quoteBid, quoteAsk) = GetBidAsk(quoteTheo, tickSize, (config.width / 2.0), quoteIndex);
-                var (maxBid, minAsk) = getMinimumLonelinessConstrainedBidAsk(quoteInstrument, farInstrument);
-
-                if (pricesAreEqual(maxBid, -11) || pricesAreEqual(minAsk, 11111))
+                if (netHolding != 0)
                 {
-                    quote = false;
+                    hedging.Hedge();
+                    return;
                 }
 
-                if (P.joinFactor > 0)
-                {
-                    quoteBid = Math.Min(quoteBid, maxBid);
-                    quoteAsk = Math.Max(quoteAsk, minAsk);
-                }
-
-                if (quoteBid < -10 || quoteAsk > 100)
-                {
-                    quote = false;
-                }
-
-                if (quoteAsk - quoteBid > config.width + 1e-9)
-                {
-                    quote = false;
-                }
-
-                if (quoteBid >= asks[quoteIndex].price)
+                if ((quoteBid >= asks[quoteIndex].price) & (asks[quoteIndex].qty > 0))
                 {
                     CancelStrategy(String.Format("quote_bid={0} >= best_offer={1}", quoteBid, asks[quoteIndex].price));
                     return;
                 }
 
-                if (quoteAsk <= bids[quoteIndex].price)
+                if ((quoteAsk <= bids[quoteIndex].price) & (bids[quoteIndex].qty > 0))
                 {
                     CancelStrategy(String.Format("quote_ask={0} <= best_bid={1}", quoteAsk, bids[quoteIndex].price));
                     return;
@@ -663,9 +601,10 @@ namespace StrategyRunner
                 int quoteSizeBid = config.size;
                 int quoteSizeAsk = config.size;
 
-                if (config.asymmetricQuoting)
+                if (config.asymmetricQuoting.HasValue && config.asymmetricQuoting.Value && P.enableAsymmetricQuoting)
                 {
-                    if (quoteIndex % 2 == 0)
+                    if (API.GetImprovedCM(quoteIndex) > (quoteBid + quoteAsk) / 2)
+                    //if (quoteIndex % 2 == 0)
                     {
                         quoteSizeBid = quoteSizeBid * 2 + 1;
                     }
@@ -696,7 +635,6 @@ namespace StrategyRunner
             SetValue(paramName, paramValue);
             throttler.updateTimespan(GetQuoteThrottleSeconds());
             throttler.updateMaxVolume(GetQuoteThrottleVolume());
-            baseSpreads.OnUpdatedParams();
         }
 
         public override void OnDeal(KGDeal deal)
@@ -714,9 +652,6 @@ namespace StrategyRunner
 
                 hedging.PropagateToStopOrder(deal.internalOrderNumber);
                 hedging.ManagePendingOrders(deal);
-
-                baseSpreads.ManagePendingOrders(deal);
-                baseSpreads.GetPosition();
 
                 hedging.Hedge();
             }

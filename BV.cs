@@ -242,6 +242,10 @@ namespace StrategyRunner
             {
                 API.CancelAllOrders(stgID);
             }
+            if (status == 1)
+            {
+                hedging.Hedge();
+            }
         }
 
         public override void OnSystemTradingMode(ref char c)
@@ -272,9 +276,12 @@ namespace StrategyRunner
             API.SendToRemote(String.Format("CANCEL STG {0}: {1}", stgID, reason), KGConstants.EVENT_ERROR);
         }
 
-        private int GetNetPosition()
+        public override int GetNetPosition()
         {
-            return holding[quoteIndex] + holding[farIndex] + holding[leanIndex];
+            int netHolding = holding[quoteIndex] + holding[farIndex];
+            if (leanIndex != farIndex)
+                netHolding += holding[leanIndex];
+            return netHolding;
         }
 
         private int GetQuotedPosition()
@@ -313,6 +320,9 @@ namespace StrategyRunner
 
         private void HedgeLeftovers(HedgeReason reason)
         {
+            if (GetNetPosition() == 0)
+                return;
+
             foreach (var deal in pendingOrders)
             {
                 orders.CancelOrder(deal.Key);
@@ -455,9 +465,11 @@ namespace StrategyRunner
                 }
 
                 if (GetNetPosition() != 0)
+                {
                     return;
+                }
 
-                if (holding[quoteIndex] + holding[farIndex] + holding[leanIndex] == 0 && pendingTrades.Count == 0 && !orders.orderInUse(buy) && !orders.orderInUse(sell))
+                if (pendingTrades.Count == 0 && !orders.orderInUse(buy) && !orders.orderInUse(sell))
                 {
                     TakeCross();
                 }

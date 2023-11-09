@@ -10,15 +10,9 @@ namespace StrategyRunner
 
         public static int maxOutrights = 0;
 
-        public static double joinFactor = 0;
-        public static double joinFactorAllVenues = 0;
-
-        public static int desiredEus1 = 0;
-        public static int desiredEus2 = 0;
-        public static int desiredEus3 = 0;
-        public static int desiredEus4 = 0;
-        public static int desiredEus5 = 0;
-        public static int desiredEus6 = 0;
+        public static double joinFactor = 1;
+        public static double joinFactorAllVenues = 5;
+        public static bool enableAsymmetricQuoting = true;
 
         public static double creditOffset = 0;
 

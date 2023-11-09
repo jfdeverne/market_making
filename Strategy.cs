@@ -14,6 +14,7 @@ namespace StrategyRunner
         public abstract void OnProcessMD(VIT vi);
         public abstract void OnDeal(KGDeal deal);
         public abstract void OnParamsUpdate(string paramName, string paramValue);
+        public abstract int GetNetPosition();
 
         public int quoteIndex;
         public int farIndex;

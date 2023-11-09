@@ -371,17 +371,17 @@ namespace StrategyRunner
             foreach (var quoter in doc.Descendants("Quoter"))
             {
                 QuoterConfig config = new QuoterConfig
-                (
-                    (double)quoter.Element("width"),
-                    (int)quoter.Element("size"),
-                    (string)quoter.Element("leanInstrument"),
-                    (string)quoter.Element("quoteInstrument"),
-                    (string)quoter.Element("farInstrument"),
-                    (string)quoter.Element("ics"),
-                    (bool)quoter.Element("asymmetricQuoting"),
-                    (double)quoter.Element("defaultBaseSpread"),
-                    (int)quoter.Element("limitPlusSize")
-                );
+                {
+                    width = (double)quoter.Element("width"),
+                    size = (int)quoter.Element("size"),
+                    leanInstrument = (string)quoter.Element("leanInstrument"),
+                    quoteInstrument = (string)quoter.Element("quoteInstrument"),
+                    farInstrument = (string)quoter.Element("farInstrument"),
+                    icsInstrument = (string)quoter.Element("ics"),
+                    asymmetricQuoting = (bool?)quoter.Element("asymmetricQuoting"),
+                    defaultBaseSpread = (double?)quoter.Element("defaultBaseSpread"),
+                    limitPlusSize = (int?)quoter.Element("limitPlusSize")
+                };
                 Strategy s = new Quoter(API, config);
                 strategies[s.stgID] = s;
             }
@@ -470,11 +470,11 @@ namespace StrategyRunner
                 //WE PRESUME THAT i's sellLeg is (i+1)'s buyLeg:
                 if (i == 0)
                 {
-                    outrightIndices[0] = combos.spreadList[0].buyLeg;
-                    outrightIndices[NBoxes + 1] = leanCombos.spreadList[0].buyLeg;
+                    outrightIndices[0] = combos.spreadList[0].buyLeg % API.n;
+                    outrightIndices[NBoxes + 1] = leanCombos.spreadList[0].buyLeg % API.n;
                 }
-                outrightIndices[i + 1] = combos.spreadList[0].sellLeg;
-                outrightIndices[i + 1 + NBoxes + 1] = leanCombos.spreadList[0].sellLeg;
+                outrightIndices[i + 1] = combos.spreadList[0].sellLeg % API.n;
+                outrightIndices[i + 1 + NBoxes + 1] = leanCombos.spreadList[0].sellLeg % API.n;
             }
 
             if (1 == 1)
@@ -561,9 +561,9 @@ namespace StrategyRunner
                         double targetBoxPrice = 0;
                         for (int i = 0; i < outrightIndices.Length; i++)
                         {
-                            if (strategies[stgID].quoteIndex == outrightIndices[i])
+                            if (strategies[stgID].quoteIndex % API.n == outrightIndices[i])
                                 targetBoxPrice += outrightTargetPrices[i, 0];
-                            else if (strategies[stgID].leanIndex == outrightIndices[i])
+                            if (strategies[stgID].leanIndex % API.n == outrightIndices[i])
                                 targetBoxPrice -= outrightTargetPrices[i, 0];
                         }
                         strategies[stgID].boxTargetPrice = targetBoxPrice;

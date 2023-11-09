@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq.Expressions;
 using KGClasses;
 using StrategyLib;
 
@@ -7,6 +8,8 @@ namespace StrategyRunner
 {
     public class Orders
     {
+        const int MAX_ORDER_SIZE = 1000;
+
         Strategy mStrategy;
         List<int /*internalOrderNumber*/> mPendingCancels;
         List<KGOrder> mToCancel;
@@ -66,6 +69,12 @@ namespace StrategyRunner
             if (amount <= 0)
             {
                 Log("ERR: order amount has to be greater than zero");
+                return -1;
+            }
+
+            if (amount > MAX_ORDER_SIZE)
+            {
+                Log("ERR: max order size exceeded");
                 return -1;
             }
 
