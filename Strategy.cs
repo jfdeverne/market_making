@@ -16,6 +16,8 @@ namespace StrategyRunner
         public abstract void OnParamsUpdate(string paramName, string paramValue);
         public abstract int GetNetPosition();
 
+        public abstract double GetMaxLossMarketHedge();
+
         public int quoteIndex;
         public int farIndex;
         public int leanIndex;
@@ -38,5 +40,7 @@ namespace StrategyRunner
         public int limitPlusSize;
 
         public double tickSize;
+
+        public static double maxLossMarketHedge = -1;
     }
 }

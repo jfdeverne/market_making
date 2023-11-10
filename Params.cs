@@ -37,6 +37,8 @@ namespace StrategyRunner
         public static double spreaderTargetPrice = 0;
         public static int spreaderStepSize = 10;
 
+        public static double maxLossMarketHedge = 0.001;
+
         public static string GetParamsStr()
         {
             string line="";

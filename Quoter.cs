@@ -190,6 +190,13 @@ namespace StrategyRunner
             return quoteThrottleVolume;
         }
 
+        public override double GetMaxLossMarketHedge()
+        {
+            if (maxLossMarketHedge == -1)
+                return P.maxLossMarketHedge;
+            return maxLossMarketHedge;
+        }
+
         private static double RoundToNearestTick(double price, double tick)
         {
             double numTicks = price / tick;

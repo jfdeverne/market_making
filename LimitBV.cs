@@ -203,6 +203,13 @@ namespace StrategyRunner
             return bvTimeoutSeconds;
         }
 
+        public override double GetMaxLossMarketHedge()
+        {
+            if (maxLossMarketHedge == -1)
+                return P.maxLossMarketHedge;
+            return maxLossMarketHedge;
+        }
+
         private void Log(string message)
         {
             API.Log(String.Format("STG {0}: {1}", stgID, message));
