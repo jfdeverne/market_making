@@ -4,9 +4,7 @@ using KGClasses;
 using StrategyLib;
 using System.Timers;
 using Detail;
-using System.Xml;
 using System.Reflection;
-using System.Reflection.Emit;
 
 namespace Detail
 {
@@ -285,10 +283,7 @@ namespace StrategyRunner
 
         public override int GetNetPosition()
         {
-            int netHolding = holding[quoteIndex] + holding[farIndex];
-            if (leanIndex != farIndex)
-                netHolding += holding[leanIndex];
-            return netHolding;
+            return holding[quoteIndex] + holding[farIndex] + holding[leanIndex];
         }
 
         private int GetQuotedPosition()
@@ -550,7 +545,6 @@ namespace StrategyRunner
                 holding[instrumentIndex] += amount;
 
                 hedging.PropagateToStopOrder(deal.internalOrderNumber);
-                hedging.ManagePendingOrders(deal);
 
                 CheckPending(instrumentIndex);
             }

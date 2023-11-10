@@ -258,10 +258,7 @@ namespace StrategyRunner
 
         public override int GetNetPosition()
         {
-            int netHolding = holding[quoteIndex] + holding[farIndex];
-            if (leanIndex != farIndex)
-                netHolding += holding[leanIndex];
-            return netHolding;
+            return holding[quoteIndex] + holding[farIndex] + holding[leanIndex];
         }
 
         private int GetQuotedPosition()
@@ -457,7 +454,6 @@ namespace StrategyRunner
                 holding[instrumentIndex] += amount;
 
                 hedging.PropagateToStopOrder(deal.internalOrderNumber);
-                hedging.ManagePendingOrders(deal);
 
                 if (deal.source != "LIMIT_BV")
                     return;

@@ -18,6 +18,8 @@ namespace StrategyRunner
         public bool? asymmetricQuoting { get; set; }
         public double? defaultBaseSpread { get; set; }
         public int? limitPlusSize { get; set; }
+        public List<string> crossVenueHedges { get; set; }
+        public List<string> correlatedHedges { get; set; }
     }
 
     public class Quoter : Strategy
@@ -49,6 +51,9 @@ namespace StrategyRunner
         DepthElement prevAsk;
 
         List<VI> instruments;
+
+        public List<int> crossVenueHedges;
+        public List<int> correlatedHedges;
         
         public Hedging hedging;
 
@@ -87,12 +92,29 @@ namespace StrategyRunner
                 else
                     limitPlusSize = 200;
 
-                //boxTargetPrice = config.defaultBaseSpread;
-
                 instruments = new List<VI>();
 
                 leanIndex = API.GetSecurityIndex(config.leanInstrument);
                 quoteIndex = API.GetSecurityIndex(config.quoteInstrument);
+
+                crossVenueHedges = new List<int>();
+                correlatedHedges = new List<int>();
+                foreach (var instrument in config.crossVenueHedges)
+                {
+                    int index = API.GetSecurityIndex(instrument);
+                    int venue = index / numInstrumentsInVenue;
+                    int indexGlobal = index % numInstrumentsInVenue;
+                    instruments.Add(new VI(venue, indexGlobal));
+                    crossVenueHedges.Add(index);
+                }
+                foreach (var instrument in config.correlatedHedges)
+                {
+                    int index = API.GetSecurityIndex(instrument);
+                    int venue = index / numInstrumentsInVenue;
+                    int indexGlobal = index % numInstrumentsInVenue;
+                    instruments.Add(new VI(venue, indexGlobal));
+                    correlatedHedges.Add(index);
+                }
 
                 if (config.farInstrument != null)
                     farIndex = API.GetSecurityIndex(config.farInstrument);
@@ -446,9 +468,10 @@ namespace StrategyRunner
 
         public override int GetNetPosition()
         {
-            int netHolding = holding[quoteIndex] + holding[farIndex];
-            if (leanIndex != farIndex)
-                netHolding += holding[leanIndex];
+            int netHolding = holding[quoteIndex] + holding[leanIndex];
+            if (farIndex != -1)
+                netHolding += holding[farIndex];
+
             return netHolding;
         }
 
@@ -658,7 +681,6 @@ namespace StrategyRunner
                 holding[instrumentIndex] += amount;
 
                 hedging.PropagateToStopOrder(deal.internalOrderNumber);
-                hedging.ManagePendingOrders(deal);
 
                 hedging.Hedge();
             }

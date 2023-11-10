@@ -380,8 +380,23 @@ namespace StrategyRunner
                     icsInstrument = (string)quoter.Element("ics"),
                     asymmetricQuoting = (bool?)quoter.Element("asymmetricQuoting"),
                     defaultBaseSpread = (double?)quoter.Element("defaultBaseSpread"),
-                    limitPlusSize = (int?)quoter.Element("limitPlusSize")
+                    limitPlusSize = (int?)quoter.Element("limitPlusSize"),
+                    crossVenueHedges = new List<string>(),
+                    correlatedHedges = new List<string>()
                 };
+
+                foreach (var hedgeInstrument in quoter.Elements("hedgeInstrument"))
+                {
+                    if (hedgeInstrument.Attribute("class").Value == "correlated")
+                    {
+                        config.correlatedHedges.Add((string)hedgeInstrument);
+                    }
+                    else if (hedgeInstrument.Attribute("class").Value == "crossVenue")
+                    {
+                        config.crossVenueHedges.Add((string)hedgeInstrument);
+                    }
+                }
+
                 Strategy s = new Quoter(API, config);
                 strategies[s.stgID] = s;
             }
