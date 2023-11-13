@@ -328,7 +328,7 @@ namespace StrategyRunner
             return Math.Abs(price1 - price2) < 1e-5;
         }
 
-        private (double, double) getMinimumLonelinessConstrainedBidAsk(VI instrument, VI farInstrument)
+        private (double, double) getMinimumLonelinessConstrainedBidAsk(VI instrument, VI farInstrument) //TODO: if farInstrument is null, use leanInstrument? Discuss with Gady
         {
             double bid = -11;
             double ask = 11111;

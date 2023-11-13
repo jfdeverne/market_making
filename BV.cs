@@ -335,8 +335,15 @@ namespace StrategyRunner
 
         private void OnTimeout(object sender, ElapsedEventArgs e)
         {
-            HedgeLeftovers(HedgeReason.TIMEOUT);
-            pendingTrades.Clear();
+            try
+            {
+                HedgeLeftovers(HedgeReason.TIMEOUT);
+                pendingTrades.Clear();
+            }
+            catch (Exception ex)
+            {
+                API.Log("ERR: " + ex.ToString() + "," + ex.StackTrace);
+            }
         }
 
         private void TakeCross()

@@ -190,32 +190,46 @@ namespace StrategyRunner
 
         private void API_OnStrategyParamUpdate(string paramName, string paramVal)
         {
-            int sInd = paramName.IndexOf('.') - 1;
-            int strategyIndex = Int32.Parse(paramName.Substring(1, sInd));
-
-            if (strategyIndex == 0)
+            try
             {
+                int sInd = paramName.IndexOf('.') - 1;
+                int strategyIndex = Int32.Parse(paramName.Substring(1, sInd));
+
+                if (strategyIndex == 0)
+                {
+                    paramName = paramName.Substring(sInd + 2);
+                    P.SetValue(paramName, paramVal);
+                    return;
+                }
+
+                if (!strategies.ContainsKey(strategyIndex))
+                {
+                    API.SendToRemote("[Variable ERR:" + paramName + "] strategy index doesnt exist", KGConstants.EVENT_ERROR);
+                    return;
+                }
+
                 paramName = paramName.Substring(sInd + 2);
-                P.SetValue(paramName, paramVal);
-                return;
-            }
+                strategies[strategyIndex].OnParamsUpdate(paramName, paramVal);
 
-            if (!strategies.ContainsKey(strategyIndex))
+                API.Log("Setting parameter value:" + paramName + "," + paramVal);
+            }
+            catch (Exception e)
             {
-                API.SendToRemote("[Variable ERR:" + paramName + "] strategy index doesnt exist", KGConstants.EVENT_ERROR);
-                return;
+                API.Log("Exception OnParamUpdate: " + e.ToString() + "," + e.StackTrace);
             }
-
-            paramName = paramName.Substring(sInd + 2);
-            strategies[strategyIndex].OnParamsUpdate(paramName, paramVal);
-
-            API.Log("Setting parameter value:" + paramName + "," + paramVal);
         }
 
         private void API_OnStrategyParamRequest()
         {
-            string line = P.GetParamsStr();
-            API.UpdateParams(line);
+            try
+            {
+                string line = P.GetParamsStr();
+                API.UpdateParams(line);
+            }
+            catch (Exception e)
+            {
+                API.Log("Exception OnParamRequest: " + e.ToString() + "," + e.StackTrace);
+            }
         }
 
         private void API_OnStrategyVariableRequest(string varName, string arrayIndicesStr)
@@ -347,168 +361,189 @@ namespace StrategyRunner
 
         private void API_OnSystemTradingMode(char c)
         {
-            foreach (KeyValuePair<int, Strategy> kv in strategies)
+            try
             {
-                kv.Value.OnSystemTradingMode(ref c);
+                foreach (KeyValuePair<int, Strategy> kv in strategies)
+                {
+                    kv.Value.OnSystemTradingMode(ref c);
+                }
+            }
+            catch (Exception e)
+            {
+                API.Log("Exception OnSystemTradingMode: " + e.ToString() + "," + e.StackTrace);
             }
         }
 
         private void API_OnPurgedOrder(KGOrder ord)
         {
-            if (strategies.ContainsKey(ord.stgID))
+            try
             {
-                strategies[ord.stgID].OnPurgedOrder(ord);
+                if (strategies.ContainsKey(ord.stgID))
+                {
+                    strategies[ord.stgID].OnPurgedOrder(ord);
+                }
+            }
+            catch (Exception e)
+            {
+                API.Log("Exception OnPurgedOrder: " + e.ToString() + "," + e.StackTrace);
             }
         }
 
         private void API_OnConnect()
         {
-            API.Log("Connected");
-            string pathQuoter = Directory.GetCurrentDirectory() + "/quoter.xml";
-
-            var doc = XDocument.Load(pathQuoter);
-
-            foreach (var quoter in doc.Descendants("Quoter"))
+            try
             {
-                QuoterConfig config = new QuoterConfig
-                {
-                    width = (double)quoter.Element("width"),
-                    size = (int)quoter.Element("size"),
-                    leanInstrument = (string)quoter.Element("leanInstrument"),
-                    quoteInstrument = (string)quoter.Element("quoteInstrument"),
-                    farInstrument = (string)quoter.Element("farInstrument"),
-                    icsInstrument = (string)quoter.Element("ics"),
-                    asymmetricQuoting = (bool?)quoter.Element("asymmetricQuoting"),
-                    defaultBaseSpread = (double?)quoter.Element("defaultBaseSpread"),
-                    limitPlusSize = (int?)quoter.Element("limitPlusSize"),
-                    crossVenueHedges = new List<string>(),
-                    correlatedHedges = new List<string>()
-                };
+                API.Log("Connected");
+                string pathQuoter = Directory.GetCurrentDirectory() + "/quoter.xml";
 
-                foreach (var hedgeInstrument in quoter.Elements("hedgeInstrument"))
+                var doc = XDocument.Load(pathQuoter);
+
+                foreach (var quoter in doc.Descendants("Quoter"))
                 {
-                    if (hedgeInstrument.Attribute("class").Value == "correlated")
+                    QuoterConfig config = new QuoterConfig
                     {
-                        config.correlatedHedges.Add((string)hedgeInstrument);
-                    }
-                    else if (hedgeInstrument.Attribute("class").Value == "crossVenue")
+                        width = (double)quoter.Element("width"),
+                        size = (int)quoter.Element("size"),
+                        leanInstrument = (string)quoter.Element("leanInstrument"),
+                        quoteInstrument = (string)quoter.Element("quoteInstrument"),
+                        farInstrument = (string)quoter.Element("farInstrument"),
+                        icsInstrument = (string)quoter.Element("ics"),
+                        asymmetricQuoting = (bool?)quoter.Element("asymmetricQuoting"),
+                        defaultBaseSpread = (double?)quoter.Element("defaultBaseSpread"),
+                        limitPlusSize = (int?)quoter.Element("limitPlusSize"),
+                        crossVenueHedges = new List<string>(),
+                        correlatedHedges = new List<string>()
+                    };
+
+                    foreach (var hedgeInstrument in quoter.Elements("hedgeInstrument"))
                     {
-                        config.crossVenueHedges.Add((string)hedgeInstrument);
+                        if (hedgeInstrument.Attribute("class").Value == "correlated")
+                        {
+                            config.correlatedHedges.Add((string)hedgeInstrument);
+                        }
+                        else if (hedgeInstrument.Attribute("class").Value == "crossVenue")
+                        {
+                            config.crossVenueHedges.Add((string)hedgeInstrument);
+                        }
+                    }
+
+                    Strategy s = new Quoter(API, config);
+                    strategies[s.stgID] = s;
+                }
+
+                string pathBV = Directory.GetCurrentDirectory() + "/bv.xml";
+                var docBV = XDocument.Load(pathBV);
+
+                quoteIndices = new List<int>();
+                quoteFarIndices = new List<int>();
+                leanIndices = new List<int>();
+                boxes = new List<Box>();
+
+                int ii = 0;
+
+                foreach (var bv in docBV.Descendants("BV"))
+                {
+                    BVConfig config = new BVConfig
+                    (
+                        (string)bv.Element("nearInstrument"),
+                        (string)bv.Element("farInstrument"),
+                        (string)bv.Element("leanInstrument"),
+                        (int)bv.Element("limitPlusSize"),
+                        (double)bv.Element("defaultBaseSpread")
+                    );
+                    Strategy s = new BV(API, config);
+                    strategies[s.stgID] = s;
+
+                    if (API.GetSecurityNumber(s.quoteIndex, 0).Length > 9) //NOT OUTRIGHT
+                    {
+                        quoteIndices.Add(s.quoteIndex);
+                        quoteFarIndices.Add(s.farIndex);
+                        leanIndices.Add(s.leanIndex);
+                        strategies[s.stgID].linkedBoxIndex = ii; //LINKING THE RELEVANT BOX ENTRY IN THE boxes ARRAYS
+                        API.SetBoxTargetPrice(s.stgID, s.boxTargetPrice);
+                        ii++;
                     }
                 }
 
-                Strategy s = new Quoter(API, config);
-                strategies[s.stgID] = s;
-            }
-
-            string pathBV = Directory.GetCurrentDirectory() + "/bv.xml";
-            var docBV = XDocument.Load(pathBV);
-
-            quoteIndices = new List<int>();
-            quoteFarIndices = new List<int>();
-            leanIndices = new List<int>();
-            boxes = new List<Box>();
-
-            int ii = 0;
-
-            foreach (var bv in docBV.Descendants("BV"))
-            {
-                BVConfig config = new BVConfig
-                (
-                    (string)bv.Element("nearInstrument"),
-                    (string)bv.Element("farInstrument"),
-                    (string)bv.Element("leanInstrument"),
-                    (int)bv.Element("limitPlusSize"),
-                    (double)bv.Element("defaultBaseSpread")
-                );
-                Strategy s = new BV(API, config);
-                strategies[s.stgID] = s;
-
-                if (API.GetSecurityNumber(s.quoteIndex, 0).Length > 9) //NOT OUTRIGHT
+                foreach (var bv in docBV.Descendants("LimitBV"))
                 {
-                    quoteIndices.Add(s.quoteIndex);
-                    quoteFarIndices.Add(s.farIndex);
-                    leanIndices.Add(s.leanIndex);
-                    strategies[s.stgID].linkedBoxIndex = ii; //LINKING THE RELEVANT BOX ENTRY IN THE boxes ARRAYS
-                    API.SetBoxTargetPrice(s.stgID, s.boxTargetPrice);
-                    ii++;
+                    BVConfig config = new BVConfig
+                    (
+                        (string)bv.Element("nearInstrument"),
+                        (string)bv.Element("farInstrument"),
+                        (string)bv.Element("leanInstrument"),
+                        (int)bv.Element("limitPlusSize"),
+                        (double)bv.Element("defaultBaseSpread")
+                    );
+                    Strategy s = new LimitBV(API, config);
+                    strategies[s.stgID] = s;
+
+                    if (API.GetSecurityNumber(s.quoteIndex, 0).Length > 9) //NOT OUTRIGHT
+                    {
+                        quoteIndices.Add(s.quoteIndex);
+                        quoteFarIndices.Add(s.farIndex);
+                        leanIndices.Add(s.leanIndex);
+                        strategies[s.stgID].linkedBoxIndex = ii; //LINKING THE RELEVANT BOX ENTRY IN THE boxes ARRAYS
+                        API.SetBoxTargetPrice(s.stgID, s.boxTargetPrice);
+                        ii++;
+                    }
+                }
+
+                NBoxes = quoteIndices.Count;
+                boxHoldings = new Matrix(NBoxes, 1);
+                boxIndices = new int[4]; //leg1, leg2 of 1st calendar spread, then leg1 and leg2 of the 2nd cal spread
+                outrightIndices = new int[2 * (NBoxes + 1)];
+                V = new Matrix(NBoxes, 2 * (NBoxes + 1));
+                beta = new Matrix(2 * (NBoxes + 1), 1);
+                boxTargetPrices = new Matrix(NBoxes, 1);
+                outrightICMs = new Matrix(2 * (NBoxes + 1), 1);
+                outrightTargetPrices = new Matrix(2 * (NBoxes + 1), 1);
+
+                for (int i = 0; i < NBoxes; i++)
+                {
+                    V[i, i] = 1;
+                    V[i, i + 1] = -1;
+                    V[i, i + NBoxes + 1] = -1;
+                    V[i, i + NBoxes + 2] = 1;
+                    Combo combos = API.GetCombos(quoteIndices[i]);
+                    Combo leanCombos = API.GetCombos(leanIndices[i]);
+                    boxIndices[0] = (combos.spreadList[0].buyLeg) % API.n;
+                    boxIndices[1] = (combos.spreadList[0].sellLeg) % API.n;
+                    boxIndices[2] = (leanCombos.spreadList[0].buyLeg) % API.n;
+                    boxIndices[3] = (leanCombos.spreadList[0].sellLeg) % API.n;
+                    boxes.Add(new Box(boxIndices));
+                    //WE PRESUME THAT i's sellLeg is (i+1)'s buyLeg:
+                    if (i == 0)
+                    {
+                        outrightIndices[0] = combos.spreadList[0].buyLeg % API.n;
+                        outrightIndices[NBoxes + 1] = leanCombos.spreadList[0].buyLeg % API.n;
+                    }
+                    outrightIndices[i + 1] = combos.spreadList[0].sellLeg % API.n;
+                    outrightIndices[i + 1 + NBoxes + 1] = leanCombos.spreadList[0].sellLeg % API.n;
+                }
+
+                if (1 == 1)
+                {
+                    for (int j = 0; j < NBoxes; j++)
+                    {
+                        Combo combos = API.GetCombos(quoteIndices[j]);
+                        Combo farCombos = API.GetCombos(quoteFarIndices[j]);
+                        Combo leanCombos = API.GetCombos(leanIndices[j]);
+                        beta[j, 0] = API.GetOutrightPos(combos.spreadList[0].buyLeg) + API.GetOutrightPos(farCombos.spreadList[0].buyLeg);
+                        beta[j + 1, 0] = API.GetOutrightPos(combos.spreadList[0].sellLeg) + API.GetOutrightPos(farCombos.spreadList[0].sellLeg);
+                        beta[j + NBoxes + 1, 0] = API.GetOutrightPos(leanCombos.spreadList[0].buyLeg);
+                        beta[j + NBoxes + 2, 0] = API.GetOutrightPos(leanCombos.spreadList[0].sellLeg);
+                    }
+                    VVTInv = (V.Multiply(V.Transpose())).Inverse;
+                    boxHoldings = VVTInv.Multiply(V.Multiply(beta));
+                    VTVVTInv = V.Transpose().Multiply(VVTInv);
+                    for (int j = 0; j < NBoxes; j++)
+                        boxes[j].holding = (int)boxHoldings[j, 0];
                 }
             }
-
-            foreach (var bv in docBV.Descendants("LimitBV"))
+            catch (Exception e)
             {
-                BVConfig config = new BVConfig
-                (
-                    (string)bv.Element("nearInstrument"),
-                    (string)bv.Element("farInstrument"),
-                    (string)bv.Element("leanInstrument"),
-                    (int)bv.Element("limitPlusSize"),
-                    (double)bv.Element("defaultBaseSpread")
-                );
-                Strategy s = new LimitBV(API, config);
-                strategies[s.stgID] = s;
-
-                if (API.GetSecurityNumber(s.quoteIndex, 0).Length > 9) //NOT OUTRIGHT
-                {
-                    quoteIndices.Add(s.quoteIndex);
-                    quoteFarIndices.Add(s.farIndex);
-                    leanIndices.Add(s.leanIndex);
-                    strategies[s.stgID].linkedBoxIndex = ii; //LINKING THE RELEVANT BOX ENTRY IN THE boxes ARRAYS
-                    API.SetBoxTargetPrice(s.stgID, s.boxTargetPrice);
-                    ii++;
-                }
-            }
-
-            NBoxes = quoteIndices.Count;
-            boxHoldings = new Matrix(NBoxes, 1);
-            boxIndices = new int[4]; //leg1, leg2 of 1st calendar spread, then leg1 and leg2 of the 2nd cal spread
-            outrightIndices = new int[2 * (NBoxes + 1)];
-            V = new Matrix(NBoxes, 2 * (NBoxes + 1));
-            beta = new Matrix(2 * (NBoxes + 1), 1);
-            boxTargetPrices = new Matrix(NBoxes, 1);
-            outrightICMs = new Matrix(2 * (NBoxes + 1), 1);
-            outrightTargetPrices = new Matrix(2 * (NBoxes + 1), 1);
-
-            for (int i = 0; i < NBoxes; i++)
-            {
-                V[i, i] = 1;
-                V[i, i + 1] = -1;
-                V[i, i + NBoxes + 1] = -1;
-                V[i, i + NBoxes + 2] = 1;
-                Combo combos = API.GetCombos(quoteIndices[i]);
-                Combo leanCombos = API.GetCombos(leanIndices[i]);
-                boxIndices[0] = (combos.spreadList[0].buyLeg) % API.n;
-                boxIndices[1] = (combos.spreadList[0].sellLeg) % API.n;
-                boxIndices[2] = (leanCombos.spreadList[0].buyLeg) % API.n;
-                boxIndices[3] = (leanCombos.spreadList[0].sellLeg) % API.n;
-                boxes.Add(new Box(boxIndices));
-                //WE PRESUME THAT i's sellLeg is (i+1)'s buyLeg:
-                if (i == 0)
-                {
-                    outrightIndices[0] = combos.spreadList[0].buyLeg % API.n;
-                    outrightIndices[NBoxes + 1] = leanCombos.spreadList[0].buyLeg % API.n;
-                }
-                outrightIndices[i + 1] = combos.spreadList[0].sellLeg % API.n;
-                outrightIndices[i + 1 + NBoxes + 1] = leanCombos.spreadList[0].sellLeg % API.n;
-            }
-
-            if (1 == 1)
-            {
-                for (int j = 0; j < NBoxes; j++)
-                {
-                    Combo combos = API.GetCombos(quoteIndices[j]);
-                    Combo farCombos = API.GetCombos(quoteFarIndices[j]);
-                    Combo leanCombos = API.GetCombos(leanIndices[j]);
-                    beta[j, 0] = API.GetOutrightPos(combos.spreadList[0].buyLeg) + API.GetOutrightPos(farCombos.spreadList[0].buyLeg);
-                    beta[j + 1, 0] = API.GetOutrightPos(combos.spreadList[0].sellLeg) + API.GetOutrightPos(farCombos.spreadList[0].sellLeg);
-                    beta[j + NBoxes + 1, 0] = API.GetOutrightPos(leanCombos.spreadList[0].buyLeg);
-                    beta[j + NBoxes + 2, 0] = API.GetOutrightPos(leanCombos.spreadList[0].sellLeg);
-                }
-                VVTInv = (V.Multiply(V.Transpose())).Inverse;
-                boxHoldings = VVTInv.Multiply(V.Multiply(beta));
-                VTVVTInv = V.Transpose().Multiply(VVTInv);
-                for (int j = 0; j < NBoxes; j++)
-                    boxes[j].holding = (int)boxHoldings[j, 0];
+                API.Log("Exception OnConnect: " + e.ToString() + "," + e.StackTrace);
             }
         }
 
@@ -521,31 +556,52 @@ namespace StrategyRunner
 
         static void GenericErrorHandler(object sender, UnhandledExceptionEventArgs e)
         {
-            API.Log("ERR:" + "GenericErrorHandler - Exiting...", true);
+            API.Log("GenericErrorHandler - Exiting... Reason:" + (e.ExceptionObject as Exception).Message + "::-->" + (e.ExceptionObject as Exception).StackTrace, true);
             System.Environment.Exit(-1);
         }
 
         private void API_OnStatusChanged(int status, int stgID)
         {
-            if (strategies.ContainsKey(stgID))
+            try
             {
-                strategies[stgID].OnStatusChanged(status);
+                if (strategies.ContainsKey(stgID))
+                {
+                    strategies[stgID].OnStatusChanged(status);
+                }
+            }
+            catch (Exception e)
+            {
+                API.Log("Exception OnStatusChanged: " + e.ToString() + "," + e.StackTrace);
             }
         }
 
         private void API_OnFlush()
         {
-            foreach (KeyValuePair<int, Strategy> kv in strategies)
+            try
             {
-                kv.Value.OnFlush();
+                foreach (KeyValuePair<int, Strategy> kv in strategies)
+                {
+                    kv.Value.OnFlush();
+                }
+            }
+            catch (Exception e)
+            {
+                API.Log("Exception OnFlush: " + e.ToString() + "," + e.StackTrace);
             }
         }
 
         private void API_OnOrder(KGOrder ord)
         {
-            if (strategies.ContainsKey(ord.stgID))
+            try
             {
-                strategies[ord.stgID].OnOrder(ord);
+                if (strategies.ContainsKey(ord.stgID))
+                {
+                    strategies[ord.stgID].OnOrder(ord);
+                }
+            }
+            catch (Exception e)
+            {
+                   API.Log("Exception OnOrder: " + e.ToString() + "," + e.StackTrace);
             }
         }
 
@@ -595,9 +651,16 @@ namespace StrategyRunner
 
         private void API_OnDeal(KGDeal deal)
         {
-            if (strategies.ContainsKey(deal.stgID))
+            try
             {
-                strategies[deal.stgID].OnDeal(deal);
+                if (strategies.ContainsKey(deal.stgID))
+                {
+                    strategies[deal.stgID].OnDeal(deal);
+                }
+            }
+            catch (Exception e)
+            {
+                API.Log("Exception OnDeal: " + e.ToString() + "," + e.StackTrace);
             }
         }
 
