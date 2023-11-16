@@ -28,7 +28,6 @@ namespace Detail
 
 namespace StrategyRunner
 {
-
     public class Hedging
     {
         Strategy mStrategy;
@@ -41,6 +40,8 @@ namespace StrategyRunner
 
         List<int> mIOCs;
         List<int> mIOCCancels;
+
+        int hedgeNowPending = 0;
 
         public Hedging(Strategy strategy)
         {
@@ -64,7 +65,7 @@ namespace StrategyRunner
             mStrategy.API.SendToRemote(message, KGConstants.EVENT_GENERAL_INFO);
         }
 
-        private int GetHedgeInstrument(int quantity) //TODO: rework
+        private int GetHedgeInstrument(int quantity)
         {
             int hedgeIndex = -1;
             double bestOffer = double.MaxValue;
@@ -72,46 +73,55 @@ namespace StrategyRunner
 
             if (quantity > 0)
             {
-                if (mStrategy.holding[mStrategy.quoteIndex] + quantity < P.maxOutrights)
-                    if (mStrategy.asks[mStrategy.quoteIndex].price < bestOffer)
+                foreach (var index in mStrategy.crossVenueIndices)
+                {
+                    if (mStrategy.holding[index] + quantity < P.maxOutrights)
                     {
-                        bestOffer = mStrategy.asks[mStrategy.quoteIndex].price;
-                        hedgeIndex = mStrategy.quoteIndex;
+                        if (mStrategy.asks[index].price < bestOffer)
+                        {
+                            bestOffer = mStrategy.asks[index].price;
+                            hedgeIndex = index;
+                        }
                     }
-                if (mStrategy.holding[mStrategy.farIndex] + quantity < P.maxOutrights)
-                    if (mStrategy.asks[mStrategy.farIndex].price < bestOffer)
+                }
+                
+                foreach (var index in mStrategy.correlatedIndices)
+                {
+                    if (mStrategy.holding[index] + quantity < P.maxOutrights)
                     {
-                        bestOffer = mStrategy.asks[mStrategy.farIndex].price;
-                        hedgeIndex = mStrategy.farIndex;
+                        if (mStrategy.asks[index].price + mStrategy.boxTargetPrice < bestOffer)
+                        {
+                            bestOffer = mStrategy.asks[index].price + mStrategy.boxTargetPrice;
+                            hedgeIndex = index;
+                        }
                     }
-                if (mStrategy.holding[mStrategy.leanIndex] + quantity < P.maxOutrights)
-                    if (mStrategy.asks[mStrategy.leanIndex].price + mStrategy.boxTargetPrice < bestOffer)
-                    {
-                        bestOffer = mStrategy.asks[mStrategy.leanIndex].price + mStrategy.boxTargetPrice;
-                        hedgeIndex = mStrategy.leanIndex;
-                    }
+                }
             }
             else if (quantity < 0)
             {
-                if (mStrategy.holding[mStrategy.leanIndex] + quantity > -P.maxOutrights)
-                    if (mStrategy.bids[mStrategy.leanIndex].price + mStrategy.boxTargetPrice > bestBid)
+                foreach (var index in mStrategy.crossVenueIndices)
+                {
+                    if (mStrategy.holding[index] + quantity > -P.maxOutrights)
                     {
-                        bestBid = mStrategy.bids[mStrategy.leanIndex].price + mStrategy.boxTargetPrice;
-                        hedgeIndex = mStrategy.leanIndex;
+                        if (mStrategy.bids[index].price > bestBid)
+                        {
+                            bestBid = mStrategy.bids[index].price;
+                            hedgeIndex = index;
+                        }
                     }
-                if (mStrategy.holding[mStrategy.quoteIndex] + quantity > -P.maxOutrights)
-                    if (mStrategy.bids[mStrategy.quoteIndex].price > bestBid)
-                    {
-                        bestBid = mStrategy.bids[mStrategy.quoteIndex].price;
-                        hedgeIndex = mStrategy.quoteIndex;
-                    }
-                if (mStrategy.holding[mStrategy.farIndex] + quantity > -P.maxOutrights)
-                    if (mStrategy.bids[mStrategy.farIndex].price > bestBid)
-                    {
-                        bestBid = mStrategy.bids[mStrategy.farIndex].price;
-                        hedgeIndex = mStrategy.farIndex;
-                    }
+                }
                 
+                foreach (var index in mStrategy.correlatedIndices)
+                {
+                    if (mStrategy.holding[index] + quantity > -P.maxOutrights)
+                    {
+                        if (mStrategy.bids[index].price + mStrategy.boxTargetPrice > bestBid)
+                        {
+                            bestBid = mStrategy.bids[index].price + mStrategy.boxTargetPrice;
+                            hedgeIndex = index;
+                        }
+                    }
+                }
             }
 
             return hedgeIndex;
@@ -119,7 +129,7 @@ namespace StrategyRunner
 
         private void PostStopOrder(int instrument, int leanInstrument, double limitPrice, double stopPrice, int volume, int stopVolume, Detail.Side side, int parentOrderId)
         {
-            Log(String.Format("posting stop order for ins={0} lmt_price={1} stp_price={2} vol={3} stp_vol={4}", instrument, limitPrice, stopPrice, volume, stopVolume));
+            mStrategy.API.Log(String.Format("posting stop order for ins={0} lmt_price={1} stp_price={2} vol={3} stp_vol={4}", instrument, limitPrice, stopPrice, volume, stopVolume));
             
             stopInfo.inUse = true;
             stopInfo.instrument = instrument;
@@ -129,8 +139,6 @@ namespace StrategyRunner
             stopInfo.parentOrderId = parentOrderId;
             stopInfo.volume = volume;
             stopInfo.side = side;
-
-            mStrategy.activeStopOrders = true;
         }
 
         private Hedge shouldStopBuy(StopInfo info)
@@ -176,15 +184,13 @@ namespace StrategyRunner
             switch (shouldTrigger(stopInfo))
             {
                 case Detail.Hedge.MARKET:
-                    int orderId = HedgeNow(stopInfo.volume);
                     stopInfo.inUse = false;
-                    mStrategy.activeStopOrders = false;
                     if (stopInfo.parentOrderId != -1)
                         mOrders.CancelOrder(stopInfo.parentOrderId);
+                    HedgeNow(stopInfo.volume);
                     break;
                 case Detail.Hedge.LIMITPLUS:
                     stopInfo.inUse = false;
-                    mStrategy.activeStopOrders = false;
                     if (stopInfo.parentOrderId != -1)
                         mOrders.CancelOrder(stopInfo.parentOrderId);
                     Hedge();
@@ -201,10 +207,10 @@ namespace StrategyRunner
                 switch (stopInfo.side)
                 {
                     case Detail.Side.BUY:
-                        OnStopTrigger(stopInfo, shouldStopSell);
+                        OnStopTrigger(stopInfo, shouldStopBuy);
                         break;
                     case Detail.Side.SELL:
-                        OnStopTrigger(stopInfo, shouldStopBuy);
+                        OnStopTrigger(stopInfo, shouldStopSell);
                         break;
                 }
             }
@@ -216,11 +222,6 @@ namespace StrategyRunner
             {
                 stopInfo.parentOrderId = -1;
                 stopInfo.inUse = false;
-            }
-
-            if (mStrategy.activeStopOrders && !stopInfo.inUse)
-            {
-                mStrategy.activeStopOrders = false;
             }
         }
 
@@ -284,7 +285,7 @@ namespace StrategyRunner
                 }
             }
 
-            PostStopOrder(index, mStrategy.leanIndex, price, mStrategy.bids[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.SELL, order.internalOrderNumber);
+            PostStopOrder(index, mStrategy.leanIndex, price, mStrategy.bids[mStrategy.leanIndex].price, -n, mStrategy.limitPlusSize, Side.SELL, order.internalOrderNumber);
         }
 
         private int Buy(int n, int index)
@@ -301,24 +302,50 @@ namespace StrategyRunner
 
         public void Hedge()
         {
+            if (hedgeNowPending != 0)
+            {
+                HedgeNow(hedgeNowPending);
+                return;
+            }
+
             int netPosition = mStrategy.GetNetPosition();
 
             if (netPosition == 0)
             {
-                mOrders.CancelOrder(order);
+                if (mOrders.orderInUse(order))
+                    mOrders.CancelOrder(order);
                 return;
             }
 
-            int pending = mOrders.orderInUse(order) && order.orderStatus != 41 ? order.bidSize : 0; //TODO: or ask size, whichever is > 0
+            if (mOrders.orderInTransientState(order))
+            {
+                return;
+            }
+
+            if (order.bidSize > 0 && order.askSize > 0)
+            {
+                throw new Exception(String.Format("STG {0}: hedging order {1} has both bid and ask size", mStrategy.stgID, order));
+            }
+
+            int pending = 0;
+
+            if (order.bidSize > 0)
+            {
+                pending += order.bidSize;
+            }
+            else if (order.askSize > 0)
+            {
+                pending -= order.askSize;
+            }
 
             int quantity = netPosition + pending;
 
             if (quantity == 0)
                 return;
 
-            Log(String.Format("hedging holding={0}, qty={1}", netPosition, quantity));
+            mStrategy.API.Log(String.Format("hedging holding={0}, qty={1}", netPosition, quantity));
 
-            int hedgeInstrument = GetHedgeInstrument(quantity);
+            int hedgeInstrument = GetHedgeInstrument(-quantity);
 
             if (quantity > 0)
             {
@@ -339,15 +366,27 @@ namespace StrategyRunner
 
             int hedgeInstrument = GetHedgeInstrument(quantity);
 
+            hedgeNowPending = 0;
+
             if (quantity < 0)
             {
                 int orderId = Sell(-quantity, hedgeInstrument);
+                if (orderId == -1)
+                {
+                    hedgeNowPending = quantity;
+                    return -1;
+                }
                 mIOCs.Add(orderId);
                 return orderId;
             }
             else if (quantity > 0)
             {
                 int orderId = Buy(quantity, hedgeInstrument);
+                if (orderId == -1)
+                {
+                    hedgeNowPending = quantity;
+                    return -1;
+                }
                 mIOCs.Add(orderId);
                 return orderId;
             }

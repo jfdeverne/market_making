@@ -18,8 +18,8 @@ namespace StrategyRunner
         public bool? asymmetricQuoting { get; set; }
         public double? defaultBaseSpread { get; set; }
         public int? limitPlusSize { get; set; }
-        public List<string> crossVenueHedges { get; set; }
-        public List<string> correlatedHedges { get; set; }
+        public List<string> crossVenueInstruments { get; set; }
+        public List<string> correlatedInstruments { get; set; }
     }
 
     public class Quoter : Strategy
@@ -36,9 +36,6 @@ namespace StrategyRunner
         public int numAllInstruments;
         public int numInstrumentsInVenue;
 
-        VI leanInstrument;
-        VI quoteInstrument;
-        VI farInstrument;
         VI icsInstrument;
 
         KGOrder buy;
@@ -51,9 +48,6 @@ namespace StrategyRunner
         DepthElement prevAsk;
 
         List<VI> instruments;
-
-        public List<int> crossVenueHedges;
-        public List<int> correlatedHedges;
         
         public Hedging hedging;
 
@@ -63,6 +57,8 @@ namespace StrategyRunner
         public static double joinFactorAllVenues = -1;
         public static int quoteThrottleSeconds = -1;
         public static int quoteThrottleVolume = -1;
+
+        public List<VI> crossVenueInstruments;
 
         public Quoter(API api, QuoterConfig config)
         {
@@ -97,29 +93,28 @@ namespace StrategyRunner
                 leanIndex = API.GetSecurityIndex(config.leanInstrument);
                 quoteIndex = API.GetSecurityIndex(config.quoteInstrument);
 
-                crossVenueHedges = new List<int>();
-                correlatedHedges = new List<int>();
-                foreach (var instrument in config.crossVenueHedges)
-                {
-                    int index = API.GetSecurityIndex(instrument);
-                    int venue = index / numInstrumentsInVenue;
-                    int indexGlobal = index % numInstrumentsInVenue;
-                    instruments.Add(new VI(venue, indexGlobal));
-                    crossVenueHedges.Add(index);
-                }
-                foreach (var instrument in config.correlatedHedges)
-                {
-                    int index = API.GetSecurityIndex(instrument);
-                    int venue = index / numInstrumentsInVenue;
-                    int indexGlobal = index % numInstrumentsInVenue;
-                    instruments.Add(new VI(venue, indexGlobal));
-                    correlatedHedges.Add(index);
-                }
+                crossVenueIndices = new List<int>();
+                correlatedIndices = new List<int>();
+                crossVenueInstruments = new List<VI>();
 
-                if (config.farInstrument != null)
-                    farIndex = API.GetSecurityIndex(config.farInstrument);
-                else
-                    farIndex = -1;
+                foreach (var instrument in config.crossVenueInstruments)
+                {
+                    int index = API.GetSecurityIndex(instrument);
+                    int venue = index / numInstrumentsInVenue;
+                    int indexGlobal = index % numInstrumentsInVenue;
+                    var vi = new VI(venue, indexGlobal);
+                    instruments.Add(vi);
+                    crossVenueInstruments.Add(vi);
+                    crossVenueIndices.Add(index);
+                }
+                foreach (var instrument in config.correlatedInstruments)
+                {
+                    int index = API.GetSecurityIndex(instrument);
+                    int venue = index / numInstrumentsInVenue;
+                    int indexGlobal = index % numInstrumentsInVenue;
+                    instruments.Add(new VI(venue, indexGlobal));
+                    correlatedIndices.Add(index);
+                }
 
                 if (config.icsInstrument != null)
                     icsIndex = API.GetSecurityIndex(config.icsInstrument);
@@ -128,32 +123,12 @@ namespace StrategyRunner
 
                 tickSize = API.GetTickSize(quoteIndex);
 
-                int leanVenue = leanIndex / numInstrumentsInVenue;
-                int leanIndexGlobal = leanIndex % numInstrumentsInVenue;
-
-                int quoteVenue = quoteIndex / numInstrumentsInVenue;
-                int quoteIndexGlobal = quoteIndex % numInstrumentsInVenue;
-
-                leanInstrument = new VI(leanVenue, leanIndexGlobal);
-                quoteInstrument = new VI(quoteVenue, quoteIndexGlobal);
-
-                instruments.Add(leanInstrument);
-                instruments.Add(quoteInstrument);
-
                 if (icsIndex != -1)
                 {
                     int icsVenue = icsIndex / numInstrumentsInVenue;
                     int icsIndexGlobal = icsIndex % numInstrumentsInVenue;
                     icsInstrument = new VI(icsVenue, icsIndexGlobal);
                     instruments.Add(icsInstrument);
-                }
-
-                if (farIndex != -1)
-                {
-                    int farVenue = farIndex / numInstrumentsInVenue;
-                    int farIndexGlobal = farIndex % numInstrumentsInVenue;
-                    farInstrument = new VI(farVenue, farIndexGlobal);
-                    instruments.Add(farInstrument);
                 }
 
                 strategyOrders = new List<KGOrder>();
@@ -182,6 +157,12 @@ namespace StrategyRunner
             {
                 API.Log("ERR: " + e.ToString() + "," + e.StackTrace);
             }
+        }
+
+        private void LogWarn(string message)
+        {
+            API.Log(String.Format("STG {0}: {1}", stgID, message));
+            API.SendToRemote(String.Format("STG {0}: {1}", stgID, message), KGConstants.EVENT_WARNING);
         }
 
         private double GetJoinFactor()
@@ -233,7 +214,6 @@ namespace StrategyRunner
             double bid = RoundToNearestTick(theoreticalPrice - width, tickSize);
             double ask = RoundToNearestTick(theoreticalPrice + width, tickSize);
 
-            //TODO: replace with the new GetDirection() logic (need to add magnitude)
             if (holding[index] > 0)
             {
                 bid -= tickSize;
@@ -263,6 +243,16 @@ namespace StrategyRunner
             }
 
             return (bid, ask);
+        }
+
+        private (double bid, double ask) CenterAroundTheo(double theoreticalPrice, double bid, double ask, double tickSize)
+        {
+            double mid = (bid + ask) / 2;
+            double difference = theoreticalPrice - mid;
+            bid += difference;
+            ask += difference;
+
+            return (RoundToNearestTick(bid, tickSize), RoundToNearestTick(ask, tickSize));
         }
 
         public override void OnStatusChanged(int status)
@@ -328,17 +318,12 @@ namespace StrategyRunner
             return Math.Abs(price1 - price2) < 1e-5;
         }
 
-        private (double, double) getMinimumLonelinessConstrainedBidAsk(VI instrument, VI farInstrument) //TODO: if farInstrument is null, use leanInstrument? Discuss with Gady
+        private (double, double) getMinimumLonelinessConstrainedBidAsk(List<VI> instruments)
         {
             double bid = -11;
             double ask = 11111;
             try
             {
-                List<DepthElement> bidDepth = API.GetBidDepth(instrument);
-                List<DepthElement> askDepth = API.GetAskDepth(instrument);
-                List<DepthElement> bidDepthFar = API.GetBidDepth(farInstrument);
-                List<DepthElement> askDepthFar = API.GetAskDepth(farInstrument);
-
                 int cumulativeBidSize = 0;
                 int cumulativeAskSize = 0;
                 int cumulativeBidSizeFar = 0;
@@ -349,74 +334,97 @@ namespace StrategyRunner
                 double lastBid = bid;
                 double lastAsk = ask;
                 bool reachedSizeTH = false;
-                while (((levelIndex < 5) & (levelIndexFar < 5)) & !reachedSizeTH)
+                
+                for (int i = 0; i < instruments.Count; i++)
                 {
-                    if (bidDepth[levelIndex].price > bidDepthFar[levelIndexFar].price)
+                    List<DepthElement> bidDepth = API.GetBidDepth(instruments[i]);
+
+                    for (int j = i + 1; j < instruments.Count; j++)
                     {
-                        lastBid = bidDepth[levelIndex].price;
-                        cumulativeBidSize += bidDepth[levelIndex].qty;
-                        if (levelIndex < 5)
-                            levelIndex++;
-                    }
-                    else if (bidDepth[levelIndex].price < bidDepthFar[levelIndexFar].price)
-                    {
-                        lastBid = bidDepthFar[levelIndexFar].price;
-                        cumulativeBidSizeFar += bidDepthFar[levelIndexFar].qty;
-                        if (levelIndexFar < 5)
-                            levelIndexFar++;
-                    }
-                    else //==
-                    {
-                        lastBid = bidDepth[levelIndex].price;
-                        cumulativeBidSize += bidDepth[levelIndex].qty;
-                        if (levelIndex < 5)
-                            levelIndex++;
-                        cumulativeBidSizeFar += bidDepthFar[levelIndexFar].qty; ;
-                        if (levelIndexFar < 5)
-                            levelIndexFar++;
-                    }
-                    if ((cumulativeBidSize >= config.size * GetJoinFactor()) | (cumulativeBidSize + cumulativeBidSizeFar >= config.size * GetJoinFactorAllVenues()))
-                    {
-                        bid = lastBid;
-                        reachedSizeTH = true;
+                        if (levelIndex >= 5 || levelIndexFar >= 5 || reachedSizeTH)
+                            break;
+
+                        List<DepthElement> bidDepthFar = API.GetBidDepth(instruments[j]);
+
+                        if (bidDepth[levelIndex].price > bidDepthFar[levelIndexFar].price)
+                        {
+                            lastBid = bidDepth[levelIndex].price;
+                            cumulativeBidSize += bidDepth[levelIndex].qty;
+                            if (levelIndex < 5)
+                                levelIndex++;
+                        }
+                        else if (bidDepth[levelIndex].price < bidDepthFar[levelIndexFar].price)
+                        {
+                            lastBid = bidDepthFar[levelIndexFar].price;
+                            cumulativeBidSizeFar += bidDepthFar[levelIndexFar].qty;
+                            if (levelIndexFar < 5)
+                                levelIndexFar++;
+                        }
+                        else //==
+                        {
+                            lastBid = bidDepth[levelIndex].price;
+                            cumulativeBidSize += bidDepth[levelIndex].qty;
+                            if (levelIndex < 5)
+                                levelIndex++;
+                            cumulativeBidSizeFar += bidDepthFar[levelIndexFar].qty;
+                            if (levelIndexFar < 5)
+                                levelIndexFar++;
+                        }
+                        if ((cumulativeBidSize >= config.size * GetJoinFactor()) | (cumulativeBidSize + cumulativeBidSizeFar >= config.size * GetJoinFactorAllVenues()))
+                        {
+                            bid = lastBid;
+                            reachedSizeTH = true;
+                        }
                     }
                 }
 
                 levelIndex = 0;
                 levelIndexFar = 0;
                 reachedSizeTH = false;
-                while (((levelIndex < 5) & (levelIndexFar < 5)) & !reachedSizeTH)
+
+                for (int i = 0; i < instruments.Count; i++)
                 {
-                    if (askDepth[levelIndex].price < askDepthFar[levelIndexFar].price)
+                    List<DepthElement> askDepth = API.GetAskDepth(instruments[i]);
+
+                    for (int j = i + 1; j < instruments.Count; j++)
                     {
-                        lastAsk = askDepth[levelIndex].price;
-                        cumulativeAskSize += askDepth[levelIndex].qty;
-                        if (levelIndex < 5)
-                            levelIndex++;
-                    }
-                    else if (askDepth[levelIndex].price > askDepthFar[levelIndexFar].price)
-                    {
-                        lastAsk = askDepthFar[levelIndexFar].price;
-                        cumulativeAskSizeFar += askDepthFar[levelIndexFar].qty;
-                        if (levelIndexFar < 5)
-                            levelIndexFar++;
-                    }
-                    else //==
-                    {
-                        lastBid = bidDepth[levelIndex].price;
-                        cumulativeAskSize += askDepth[levelIndex].qty;
-                        if (levelIndex < 5)
-                            levelIndex++;
-                        cumulativeAskSizeFar += askDepthFar[levelIndexFar].qty; ;
-                        if (levelIndexFar < 5)
-                            levelIndexFar++;
-                    }
-                    if ((cumulativeAskSize >= config.size * P.joinFactor) | (cumulativeAskSize + cumulativeAskSizeFar >= config.size * GetJoinFactorAllVenues()))
-                    {
-                        ask = lastAsk;
-                        reachedSizeTH = true;
+                        if (levelIndex >= 5 || levelIndexFar >= 5 || reachedSizeTH)
+                            break;
+
+                        List<DepthElement> askDepthFar = API.GetAskDepth(instruments[j]);
+
+                        if (askDepth[levelIndex].price < askDepthFar[levelIndexFar].price)
+                        {
+                            lastAsk = askDepth[levelIndex].price;
+                            cumulativeAskSize += askDepth[levelIndex].qty;
+                            if (levelIndex < 5)
+                                levelIndex++;
+                        }
+                        else if (askDepth[levelIndex].price > askDepthFar[levelIndexFar].price)
+                        {
+                            lastAsk = askDepthFar[levelIndexFar].price;
+                            cumulativeAskSizeFar += askDepthFar[levelIndexFar].qty;
+                            if (levelIndexFar < 5)
+                                levelIndexFar++;
+                        }
+                        else //==
+                        {
+                            lastAsk = askDepth[levelIndex].price;
+                            cumulativeAskSize += askDepth[levelIndex].qty;
+                            if (levelIndex < 5)
+                                levelIndex++;
+                            cumulativeAskSizeFar += askDepthFar[levelIndexFar].qty;
+                            if (levelIndexFar < 5)
+                                levelIndexFar++;
+                        }
+                        if ((cumulativeAskSize >= config.size * P.joinFactor) | (cumulativeAskSize + cumulativeAskSizeFar >= config.size * GetJoinFactorAllVenues()))
+                        {
+                            ask = lastAsk;
+                            reachedSizeTH = true;
+                        }
                     }
                 }
+
                 return (bid, ask);
             }
             catch (Exception e)
@@ -468,11 +476,29 @@ namespace StrategyRunner
 
         public override int GetNetPosition()
         {
-            int netHolding = holding[quoteIndex] + holding[leanIndex];
-            if (farIndex != -1)
-                netHolding += holding[farIndex];
+            int netHolding = 0;
+
+            foreach (var instrument in correlatedIndices)
+            {
+                netHolding += holding[instrument];
+            }
+
+            foreach (var instrument in crossVenueIndices)
+            {
+                netHolding += holding[instrument];
+            }
 
             return netHolding;
+        }
+
+        public double GetLeanQuoteSpread()
+        {
+            if (correlatedIndices.Contains(leanIndex))
+            {
+                return boxTargetPrice;
+            }
+
+            return 0;
         }
 
         public override void OnProcessMD(VIT vit)
@@ -511,19 +537,15 @@ namespace StrategyRunner
                     return;
                 }
 
-                if (activeStopOrders)
-                {
-                    hedging.EvaluateStops();
-                }
+                hedging.EvaluateStops();
 
                 theo = API.GetImprovedCM(instrumentIndex);
 
                 bool quote = !pricesAreEqual(theo, -11);
-                double quoteTheo = theo + boxTargetPrice;
-                //double quoteTheo = boxTargetPrice;
+                double quoteTheo = theo + GetLeanQuoteSpread();
 
                 var (quoteBid, quoteAsk) = GetBidAsk(quoteTheo, tickSize, (config.width / 2.0), quoteIndex);
-                var (maxBid, minAsk) = getMinimumLonelinessConstrainedBidAsk(quoteInstrument, farInstrument);
+                var (maxBid, minAsk) = getMinimumLonelinessConstrainedBidAsk(crossVenueInstruments);
 
                 if (pricesAreEqual(maxBid, -11) || pricesAreEqual(minAsk, 11111))
                 {
@@ -535,6 +557,8 @@ namespace StrategyRunner
                     quoteBid = Math.Min(quoteBid, maxBid);
                     quoteAsk = Math.Max(quoteAsk, minAsk);
                 }
+
+                (quoteBid, quoteAsk) = CenterAroundTheo(quoteTheo, quoteBid, quoteAsk, tickSize);
 
                 if (quoteBid < -10 || quoteAsk > 1000)
                 {
@@ -618,13 +642,15 @@ namespace StrategyRunner
 
                 if ((quoteBid >= asks[quoteIndex].price) & (asks[quoteIndex].qty > 0))
                 {
-                    CancelStrategy(String.Format("quote_bid={0} >= best_offer={1}", quoteBid, asks[quoteIndex].price));
+                    LogWarn(String.Format("quote_bid={0} >= best_offer={1}", quoteBid, asks[quoteIndex].price));
+                    quoteBid = asks[quoteIndex].price - tickSize;
                     return;
                 }
 
                 if ((quoteAsk <= bids[quoteIndex].price) & (bids[quoteIndex].qty > 0))
                 {
-                    CancelStrategy(String.Format("quote_ask={0} <= best_bid={1}", quoteAsk, bids[quoteIndex].price));
+                    LogWarn(String.Format("quote_ask={0} <= best_bid={1}", quoteAsk, bids[quoteIndex].price));
+                    quoteAsk = bids[quoteIndex].price + tickSize;
                     return;
                 }
 

@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq.Expressions;
+using Detail;
 using KGClasses;
 using StrategyLib;
 
@@ -82,24 +84,28 @@ namespace StrategyRunner
             ord.source = source;
             mStrategy.API.PostOrder(ord, mStrategy.stgID);
 
-            mStrategy.API.Log(String.Format("SendOrder instrument={0} side={1} price={2} amount={3} source={4} id={5}", instrument, side, price, amount, source, ord.internalOrderNumber));
+            mStrategy.API.Log(String.Format("[ORDERS] SendOrder instrument={0} side={1} price={2} amount={3} source={4} id={5}", instrument, side, price, amount, source, ord.internalOrderNumber));
 
             return ord.internalOrderNumber;
         }
 
         public bool CancelOrder(KGOrder ord)
         {
-            if (orderInTransientState(ord))
+            if (ord.orderStatus == 41 || ord.orderStatus == 4)
+                return true;
+
+            if (orderInTransientState(ord) || ord.orderStatus == 9)
             {
                 mPendingCancels.Add(ord.internalOrderNumber);
+                mStrategy.API.Log(String.Format("[ORDERS] CancelOrder PENDING status={0} order={1}", ord.orderStatus, ord.internalOrderNumber));
                 return false;
             }
 
+            mStrategy.API.Log(String.Format("[ORDERS] CancelOrder status={0} order={1}", ord.orderStatus, ord.internalOrderNumber));
             ord.orderStatus = 41;
             mStrategy.API.PostOrder(ord, mStrategy.stgID);
             return true;
         }
-
         public void CancelOrder(int id)
         {
             foreach (var order in mStrategy.strategyOrders)
@@ -134,9 +140,14 @@ namespace StrategyRunner
 
         public void OnProcessMD()
         {
+            List<KGOrder> ordersToRemove = new List<KGOrder>();
             foreach (var order in mToCancel)
             {
                 CancelOrder(order);
+                ordersToRemove.Add(order);
+            }
+            foreach (var order in ordersToRemove)
+            {
                 mToCancel.Remove(order);
             }
         }
