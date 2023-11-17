@@ -27,13 +27,15 @@ namespace StrategyRunner
         public DepthElement[] bids;
         public DepthElement[] asks;
 
+        public List<int> crossVenueIndices;
+        public List<int> correlatedIndices;
+
         public List<KGOrder> strategyOrders;
 
         public API API;
         public int stgID;
         public char systemTradingMode = 'C';
         public Orders orders;
-        public bool activeStopOrders;
 
         public int linkedBoxIndex = -1;
 

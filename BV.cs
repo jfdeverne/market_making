@@ -31,6 +31,8 @@ namespace StrategyRunner
         public string leanInstrument;
         public int limitPlusSize;
         public double defaultBaseSpread;
+        public List<string> crossVenueInstruments { get; set; }
+        public List<string> correlatedInstruments { get; set; }
 
         public BVConfig(string nearInstrument, string farInstrument, string leanInstrument, int limitPlusSize, double defaultBaseSpread)
         {
@@ -39,6 +41,8 @@ namespace StrategyRunner
             this.leanInstrument = leanInstrument;
             this.limitPlusSize = limitPlusSize;
             this.defaultBaseSpread = defaultBaseSpread;
+            crossVenueInstruments = new List<string>();
+            correlatedInstruments = new List<string>();
         }
     }
 
@@ -61,7 +65,6 @@ namespace StrategyRunner
 
         VI nearInstrument;
         VI farInstrument;
-        VI leanInstrument;
 
         KGOrder buy;
         KGOrder sell;
@@ -125,22 +128,35 @@ namespace StrategyRunner
                 farIndex = API.GetSecurityIndex(config.farInstrument);
                 leanIndex = API.GetSecurityIndex(config.leanInstrument);
 
+                tickSize = API.GetTickSize(quoteIndex);
+
                 int nearVenue = quoteIndex / numInstrumentsInVenue;
                 int nearIndexGlobal = quoteIndex % numInstrumentsInVenue;
 
                 int farVenue = farIndex / numInstrumentsInVenue;
                 int farIndexGlobal = farIndex % numInstrumentsInVenue;
 
-                int leanVenue = leanIndex / numInstrumentsInVenue;
-                int leanIndexGlobal = leanIndex % numInstrumentsInVenue;
-
                 nearInstrument = new VI(nearVenue, nearIndexGlobal);
                 farInstrument = new VI(farVenue, farIndexGlobal);
-                leanInstrument = new VI(leanVenue, leanIndexGlobal);
 
-                instruments.Add(nearInstrument);
-                instruments.Add(farInstrument);
-                instruments.Add(leanInstrument);
+                crossVenueIndices = new List<int>();
+                correlatedIndices = new List<int>();
+                foreach (var instrument in config.crossVenueInstruments)
+                {
+                    int index = API.GetSecurityIndex(instrument);
+                    int venue = index / numInstrumentsInVenue;
+                    int indexGlobal = index % numInstrumentsInVenue;
+                    instruments.Add(new VI(venue, indexGlobal));
+                    crossVenueIndices.Add(index);
+                }
+                foreach (var instrument in config.correlatedInstruments)
+                {
+                    int index = API.GetSecurityIndex(instrument);
+                    int venue = index / numInstrumentsInVenue;
+                    int indexGlobal = index % numInstrumentsInVenue;
+                    instruments.Add(new VI(venue, indexGlobal));
+                    correlatedIndices.Add(index);
+                }
 
                 strategyOrders = new List<KGOrder>();
 
@@ -283,8 +299,21 @@ namespace StrategyRunner
 
         public override int GetNetPosition()
         {
-            return holding[quoteIndex] + holding[farIndex] + holding[leanIndex];
+            int netHolding = 0;
+
+            foreach (var instrument in correlatedIndices)
+            {
+                netHolding += holding[instrument];
+            }
+
+            foreach (var instrument in crossVenueIndices)
+            {
+                netHolding += holding[instrument];
+            }
+
+            return netHolding;
         }
+
 
         private int GetQuotedPosition()
         {
@@ -450,8 +479,6 @@ namespace StrategyRunner
         {
             try
             {
-                orders.OnProcessMD();
-
                 VI vi = new VI(vit.v, vit.i);
                 int instrumentIndex = vi.i + API.n * vi.v;
 
@@ -468,10 +495,10 @@ namespace StrategyRunner
                     return;
                 }
 
-                if (activeStopOrders)
-                {
-                    hedging.EvaluateStops();
-                }
+                orders.OnProcessMD();
+                hedging.OnProcessMD();
+
+                hedging.EvaluateStops();
 
                 if (GetNetPosition() != 0)
                 {

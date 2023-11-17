@@ -57,7 +57,7 @@ namespace Throttler
 
         public void updateTimespan(int seconds)
         {
-            TimeSpan ts = new TimeSpan(0,0,0,0,seconds*1000);
+            TimeSpan ts = new TimeSpan(0, 0, 0, 0, seconds * 1000);
             mTime = ts;
         }
 
@@ -406,25 +406,36 @@ namespace StrategyRunner
                         size = (int)quoter.Element("size"),
                         leanInstrument = (string)quoter.Element("leanInstrument"),
                         quoteInstrument = (string)quoter.Element("quoteInstrument"),
-                        farInstrument = (string)quoter.Element("farInstrument"),
                         icsInstrument = (string)quoter.Element("ics"),
                         asymmetricQuoting = (bool?)quoter.Element("asymmetricQuoting"),
                         defaultBaseSpread = (double?)quoter.Element("defaultBaseSpread"),
                         limitPlusSize = (int?)quoter.Element("limitPlusSize"),
-                        crossVenueHedges = new List<string>(),
-                        correlatedHedges = new List<string>()
+                        crossVenueInstruments = new List<string>(),
+                        correlatedInstruments = new List<string>()
                     };
 
                     foreach (var hedgeInstrument in quoter.Elements("hedgeInstrument"))
                     {
                         if (hedgeInstrument.Attribute("class").Value == "correlated")
                         {
-                            config.correlatedHedges.Add((string)hedgeInstrument);
+                            config.correlatedInstruments.Add((string)hedgeInstrument);
                         }
                         else if (hedgeInstrument.Attribute("class").Value == "crossVenue")
                         {
-                            config.crossVenueHedges.Add((string)hedgeInstrument);
+                            config.crossVenueInstruments.Add((string)hedgeInstrument);
                         }
+                    }
+
+                    config.crossVenueInstruments.Add(config.quoteInstrument);
+
+                    var leanEl = quoter.Element("leanInstrument");
+                    if (leanEl.Attribute("class").Value == "correlated")
+                    {
+                        config.correlatedInstruments.Add(config.leanInstrument);
+                    }
+                    else if (leanEl.Attribute("class").Value == "crossVenue")
+                    {
+                        config.crossVenueInstruments.Add(config.leanInstrument);
                     }
 
                     Strategy s = new Quoter(API, config);
@@ -451,6 +462,41 @@ namespace StrategyRunner
                         (int)bv.Element("limitPlusSize"),
                         (double)bv.Element("defaultBaseSpread")
                     );
+
+                    foreach (var hedgeInstrument in bv.Elements("hedgeInstrument"))
+                    {
+                        if (hedgeInstrument.Attribute("class").Value == "correlated")
+                        {
+                            config.correlatedInstruments.Add((string)hedgeInstrument);
+                        }
+                        else if (hedgeInstrument.Attribute("class").Value == "crossVenue")
+                        {
+                            config.crossVenueInstruments.Add((string)hedgeInstrument);
+                        }
+                    }
+
+                    config.crossVenueInstruments.Add(config.nearInstrument);
+
+                    var leanEl = bv.Element("leanInstrument");
+                    if (leanEl.Attribute("class").Value == "correlated")
+                    {
+                        config.correlatedInstruments.Add(config.leanInstrument);
+                    }
+                    else if (leanEl.Attribute("class").Value == "crossVenue")
+                    {
+                        config.crossVenueInstruments.Add(config.leanInstrument);
+                    }
+
+                    var farEl = bv.Element("farInstrument");
+                    if (farEl.Attribute("class").Value == "correlated")
+                    {
+                        config.correlatedInstruments.Add(config.farInstrument);
+                    }
+                    else if (farEl.Attribute("class").Value == "crossVenue")
+                    {
+                        config.crossVenueInstruments.Add(config.farInstrument);
+                    }
+
                     Strategy s = new BV(API, config);
                     strategies[s.stgID] = s;
 
@@ -475,6 +521,41 @@ namespace StrategyRunner
                         (int)bv.Element("limitPlusSize"),
                         (double)bv.Element("defaultBaseSpread")
                     );
+
+                    foreach (var hedgeInstrument in bv.Elements("hedgeInstrument"))
+                    {
+                        if (hedgeInstrument.Attribute("class").Value == "correlated")
+                        {
+                            config.correlatedInstruments.Add((string)hedgeInstrument);
+                        }
+                        else if (hedgeInstrument.Attribute("class").Value == "crossVenue")
+                        {
+                            config.crossVenueInstruments.Add((string)hedgeInstrument);
+                        }
+                    }
+
+                    config.crossVenueInstruments.Add(config.nearInstrument);
+
+                    var leanEl = bv.Element("leanInstrument");
+                    if (leanEl.Attribute("class").Value == "correlated")
+                    {
+                        config.correlatedInstruments.Add(config.leanInstrument);
+                    }
+                    else if (leanEl.Attribute("class").Value == "crossVenue")
+                    {
+                        config.crossVenueInstruments.Add(config.leanInstrument);
+                    }
+
+                    var farEl = bv.Element("farInstrument");
+                    if (farEl.Attribute("class").Value == "correlated")
+                    {
+                        config.correlatedInstruments.Add(config.farInstrument);
+                    }
+                    else if (farEl.Attribute("class").Value == "crossVenue")
+                    {
+                        config.crossVenueInstruments.Add(config.farInstrument);
+                    }
+
                     Strategy s = new LimitBV(API, config);
                     strategies[s.stgID] = s;
 
@@ -559,7 +640,6 @@ namespace StrategyRunner
             API.Log("GenericErrorHandler - Exiting... Reason:" + (e.ExceptionObject as Exception).Message + "::-->" + (e.ExceptionObject as Exception).StackTrace, true);
             System.Environment.Exit(-1);
         }
-
         private void API_OnStatusChanged(int status, int stgID)
         {
             try
@@ -601,7 +681,7 @@ namespace StrategyRunner
             }
             catch (Exception e)
             {
-                   API.Log("Exception OnOrder: " + e.ToString() + "," + e.StackTrace);
+                API.Log("Exception OnOrder: " + e.ToString() + "," + e.StackTrace);
             }
         }
 
@@ -618,6 +698,7 @@ namespace StrategyRunner
                 {
                     for (int i = 0; i < NBoxes; i++)
                     {
+                        boxIndices = boxes[i].indices;
                         boxes[i].ICM = API.GetImprovedCM(boxIndices[0]) - API.GetImprovedCM(boxIndices[1]) - (API.GetImprovedCM(boxIndices[2]) - API.GetImprovedCM(boxIndices[3]));
                         boxTargetPrices[i, 0] = boxes[i].targetPrice;
                     }

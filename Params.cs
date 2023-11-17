@@ -9,6 +9,10 @@ namespace StrategyRunner
         public static int maxTradeSize = 0;
 
         public static int maxOutrights = 0;
+        public static int maxPosNear = -150; //BY DEFINING IT TO BE NEGATIVE WE ENSURE WE WILL BUY AT LEAST 150 FAR BEFORE CONSIDER SELLING
+        public static int minPosNear = -250;
+        public static int maxPosFar = 250;
+        public static int minPosFar = 150;
 
         public static double joinFactor = 1;
         public static double joinFactorAllVenues = 5;

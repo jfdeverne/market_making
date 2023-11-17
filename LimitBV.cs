@@ -27,18 +27,11 @@ namespace StrategyRunner
         public int numAllInstruments;
         public int numInstrumentsInVenue;
 
-        VI nearInstrument;
-        VI farInstrument;
-        VI leanInstrument;
-
         KGOrder buy;
         KGOrder sell;
 
         KGOrder limitBuy;
         KGOrder limitSell;
-
-        KGOrder limitBuyFar;
-        KGOrder limitSellFar;
 
         List<VI> instruments;
         Dictionary<int /*orderId*/, int /*amount*/> pendingOrders;
@@ -57,6 +50,10 @@ namespace StrategyRunner
         public static double creditOffset = -1;
         public static int maxCrossVolume = -1;
         public static int maxOutrights = -1;
+        public static int maxPosNear = -1;
+        public static int minPosNear = -1;
+        public static int maxPosFar = -1;
+        public static int minPosFar = -1;
         public static int bvMaxOutstandingOutrights = -1;
         public static double bvTimeoutSeconds = -1;
         public static double bvMaxLoss = -1;
@@ -86,6 +83,8 @@ namespace StrategyRunner
                     asks[i] = new DepthElement(11111, 0);
                 }
 
+                tickSize = API.GetTickSize(quoteIndex);
+
                 limitPlusSize = config.limitPlusSize;
                 boxTargetPrice = config.defaultBaseSpread;
 
@@ -105,13 +104,24 @@ namespace StrategyRunner
                 int leanVenue = leanIndex / numInstrumentsInVenue;
                 int leanIndexGlobal = leanIndex % numInstrumentsInVenue;
 
-                nearInstrument = new VI(nearVenue, nearIndexGlobal);
-                farInstrument = new VI(farVenue, farIndexGlobal);
-                leanInstrument = new VI(leanVenue, leanIndexGlobal);
-
-                instruments.Add(nearInstrument);
-                instruments.Add(farInstrument);
-                instruments.Add(leanInstrument);
+                crossVenueIndices = new List<int>();
+                correlatedIndices = new List<int>();
+                foreach (var instrument in config.crossVenueInstruments)
+                {
+                    int index = API.GetSecurityIndex(instrument);
+                    int venue = index / numInstrumentsInVenue;
+                    int indexGlobal = index % numInstrumentsInVenue;
+                    instruments.Add(new VI(venue, indexGlobal));
+                    crossVenueIndices.Add(index);
+                }
+                foreach (var instrument in config.correlatedInstruments)
+                {
+                    int index = API.GetSecurityIndex(instrument);
+                    int venue = index / numInstrumentsInVenue;
+                    int indexGlobal = index % numInstrumentsInVenue;
+                    instruments.Add(new VI(venue, indexGlobal));
+                    correlatedIndices.Add(index);
+                }
 
                 strategyOrders = new List<KGOrder>();
 
@@ -124,10 +134,6 @@ namespace StrategyRunner
                 strategyOrders.Add(limitBuy);
                 limitSell = new KGOrder();
                 strategyOrders.Add(limitSell);
-                limitBuyFar = new KGOrder();
-                strategyOrders.Add(limitBuyFar);
-                limitSellFar = new KGOrder();
-                strategyOrders.Add(limitSellFar);
 
                 TimeSpan tBv = new TimeSpan(0, 0, 0, 0, GetBvThrottleSeconds() * 1000);
 
@@ -188,6 +194,32 @@ namespace StrategyRunner
                 return P.maxOutrights;
             return maxOutrights;
         }
+
+        private int GetMaxPosNear()
+        {
+            if (maxPosNear == -1)
+                return P.maxPosNear;
+            return maxPosNear;
+        }
+        private int GetMaxPosFar()
+        {
+            if (maxPosFar == -1)
+                return P.maxPosFar;
+            return maxPosFar;
+        }
+        private int GetMinPosNear()
+        {
+            if (minPosNear == -1)
+                return P.minPosNear;
+            return minPosNear;
+        }
+        private int GetMinPosFar()
+        {
+            if (minPosFar == -1)
+                return P.minPosFar;
+            return minPosFar;
+        }
+
 
         private int GetBvMaxOutstandingOutrights()
         {
@@ -256,14 +288,38 @@ namespace StrategyRunner
             API.SendToRemote(String.Format("CANCEL STG {0}: {1}", stgID, reason), KGConstants.EVENT_ERROR);
         }
 
+        //public override int GetNetPosition()
+        //{
+        //    int netHolding = holding[quoteIndex];
+        //    if (farIndex != quoteIndex) //== IN CASE OF BF
+        //        netHolding += holding[farIndex];
+        //    if (leanIndex != farIndex)
+        //        netHolding += holding[leanIndex];
+        //    return netHolding;
+        //}
         public override int GetNetPosition()
         {
-            return holding[quoteIndex] + holding[farIndex] + holding[leanIndex];
+            int netHolding = 0;
+
+            foreach (var instrument in correlatedIndices)
+            {
+                netHolding += holding[instrument];
+            }
+
+            foreach (var instrument in crossVenueIndices)
+            {
+                netHolding += holding[instrument];
+            }
+
+            return netHolding;
         }
 
         private int GetQuotedPosition()
         {
-            return holding[quoteIndex] + holding[farIndex];
+            int netHolding = holding[quoteIndex];
+            if (farIndex != quoteIndex) //== IN CASE OF BF
+                netHolding += holding[farIndex];
+            return netHolding;
         }
 
         private int Buy(int n, string source, int index, double price)
@@ -325,49 +381,101 @@ namespace StrategyRunner
 
         private void SendLimitOrders()
         {
-            int ordId;
-            if (isBuyPreferred(bids[quoteIndex].price) && (bids[farIndex].price <= bids[quoteIndex].price))
+            try
             {
-                if ((GetQuotedPosition() > -GetBvMaxOutstandingOutrights()) && (holding[leanIndex] > -GetMaxOutrights()) && (!orders.orderInUse(limitBuyFar)))
-                {
-                    limitBVBuyPrice = bids[quoteIndex].price;
-                    limitBVBuyIndex = farIndex;
-                    limitBVSellIndex = quoteIndex;
+                API.Log("-->SendLimitOrders");
 
-                    int volume = Math.Min(bids[quoteIndex].qty / 2, GetMaxCrossVolume());
-                    if (volume > 0)
-                        ordId = orders.SendOrder(limitBuyFar, limitBVBuyIndex, Side.BUY, limitBVBuyPrice, volume, "LIMIT_BV");
+                int ordId;
+                //KGOrder tmpOrd = null;
+                int qty = 0;
+                double theBVPrice = Math.Max(bids[farIndex].price, bids[quoteIndex].price);
+                if (isBuyPreferred(theBVPrice) && (holding[leanIndex] > -GetMaxOutrights()))
+                {
+                    if (bids[farIndex].price <= bids[quoteIndex].price)
+                    {
+                        //if ((GetQuotedPosition() > -GetBvMaxOutstandingOutrights()) && (holding[leanIndex] > -GetMaxOutrights()) && (!orders.orderInUse(limitBuyFar)))
+                        if (((holding[farIndex] < GetMaxPosFar()) | (farIndex == quoteIndex)) && (!orders.orderInUse(limitBuy)))
+                        {
+                            limitBVBuyPrice = theBVPrice;
+                            limitBVBuyIndex = farIndex;
+                            limitBVSellIndex = quoteIndex;
+                            qty = Math.Min(bids[quoteIndex].qty / 2, GetMaxCrossVolume());
+                            //tmpOrd = limitBuyFar;
+                        }
+                    }
+                    if (bids[farIndex].price >= bids[quoteIndex].price)
+                    {
+                        if (((holding[quoteIndex] < GetMaxPosNear()) | (farIndex == quoteIndex)) && (!orders.orderInUse(limitBuy)))
+                        {
+                            if ((bids[farIndex].price > bids[quoteIndex].price) || (bids[farIndex].qty > bids[quoteIndex].qty))
+                            {
+                                limitBVBuyPrice = theBVPrice;
+                                limitBVBuyIndex = quoteIndex;
+                                limitBVSellIndex = farIndex;
+                                qty = Math.Min(bids[farIndex].qty / 2, GetMaxCrossVolume());
+                                //tmpOrd = limitBuy;
+                            }
+                        }
+                    }
+                    if (qty > 0)
+                        ordId = orders.SendOrder(limitBuy, limitBVBuyIndex, Side.BUY, limitBVBuyPrice, qty, "LIMIT_BV");
                 }
+
+
+                qty = 0;
+                theBVPrice = Math.Min(asks[farIndex].price, asks[quoteIndex].price);
+                if (isSellPreferred(theBVPrice) && (holding[leanIndex] < GetMaxOutrights()))
+                {
+                    if (asks[farIndex].price >= asks[quoteIndex].price)
+                    {
+                        //if ((GetQuotedPosition() < P.bvMaxOutstandingOutrights) && (holding[leanIndex] < GetMaxOutrights()) && (!orders.orderInUse(limitSellFar)))
+                        if (((holding[farIndex] > GetMinPosFar()) | (farIndex == quoteIndex)) && (!orders.orderInUse(limitSell)))
+                        {
+                            limitBVSellPrice = theBVPrice;
+                            limitBVSellIndex = farIndex;
+                            limitBVBuyIndex = quoteIndex;
+                            qty = Math.Min(asks[quoteIndex].qty / 2, GetMaxCrossVolume());
+                        }
+                    }
+                    if (asks[farIndex].price <= asks[quoteIndex].price)
+                    {
+                        if (((holding[quoteIndex] > GetMinPosNear()) | (farIndex == quoteIndex)) && (!orders.orderInUse(limitSell)))
+                        {
+                            if ((asks[farIndex].price < asks[quoteIndex].price) || (asks[farIndex].qty > asks[quoteIndex].qty))
+                            {
+                                limitBVSellPrice = theBVPrice;
+                                limitBVSellIndex = quoteIndex;
+                                limitBVBuyIndex = farIndex;
+                                qty = Math.Min(asks[farIndex].qty / 2, GetMaxCrossVolume());
+                            }
+                        }
+                    }
+                    if (qty > 0)
+                        ordId = orders.SendOrder(limitSell, limitBVSellIndex, Side.SELL, limitBVSellPrice, qty, "LIMIT_BV");
+                }
+
+                API.Log("<--SendLimitOrders");
+
             }
-            if (isSellPreferred(asks[quoteIndex].price) && (asks[farIndex].price >= asks[quoteIndex].price))
+            catch (Exception e)
             {
-                if ((GetQuotedPosition() < P.bvMaxOutstandingOutrights) && (holding[leanIndex] < GetMaxOutrights()) && (!orders.orderInUse(limitSellFar)))
-                {
-                    limitBVSellPrice = asks[quoteIndex].price;
-                    limitBVSellIndex = farIndex;
-                    limitBVBuyIndex = quoteIndex;
+                API.Log("ERR in SendLimitOrders: " + e.ToString() + "," + e.StackTrace);
 
-                    int volume = Math.Min(asks[quoteIndex].qty / 2, GetMaxCrossVolume());
-                    if (volume > 0)
-                        ordId = orders.SendOrder(limitSellFar, limitBVSellIndex, Side.SELL, limitBVSellPrice, volume, "LIMIT_BV");
-                }
             }
         }
 
         private void CancelOnPriceMove(int instrumentIndex)
         {
-            if ((!pricesAreEqual(limitBVBuyPrice, bids[quoteIndex].price)) && (orders.orderInUse(limitBuyFar)))
-                orders.CancelOrder(limitBuyFar);
-            else if ((!pricesAreEqual(limitBVSellPrice, asks[quoteIndex].price)) && (orders.orderInUse(limitSellFar)))
-                orders.CancelOrder(limitSellFar);
+            if ((!pricesAreEqual(limitBVBuyPrice, Math.Max(bids[quoteIndex].price, bids[farIndex].price))) && (orders.orderInUse(limitBuy)))
+                orders.CancelOrder(limitBuy);
+            else if ((!pricesAreEqual(limitBVSellPrice, Math.Min(asks[quoteIndex].price, asks[farIndex].price))) && (orders.orderInUse(limitSell)))
+                orders.CancelOrder(limitSell);
         }
 
         public override void OnProcessMD(VIT vit)
         {
             try
             {
-                orders.OnProcessMD();
-
                 VI vi = new VI(vit.v, vit.i);
                 int instrumentIndex = vi.i + API.n * vi.v;
 
@@ -384,10 +492,10 @@ namespace StrategyRunner
                     return;
                 }
 
-                if (activeStopOrders)
-                {
-                    hedging.EvaluateStops();
-                }
+                orders.OnProcessMD();
+                hedging.OnProcessMD();
+
+                hedging.EvaluateStops();
 
                 if (GetNetPosition() != 0)
                 {
@@ -422,6 +530,7 @@ namespace StrategyRunner
             timeout.Start();
             if (amount < 0)
             {
+                bool cancelOK = orders.CancelOrder(limitSell);
                 int orderId = Buy(-amount, "ON_LIMIT_BV", limitBVBuyIndex, limitBVSellPrice);
                 if (orderId == -1)
                 {
@@ -430,6 +539,7 @@ namespace StrategyRunner
             }
             else if (amount > 0)
             {
+                bool cancelOK = orders.CancelOrder(limitBuy);
                 int orderId = Sell(amount, "ON_LIMIT_BV", limitBVSellIndex, limitBVBuyPrice);
                 if (orderId == -1)
                 {
@@ -465,6 +575,13 @@ namespace StrategyRunner
                 if (deal.source != "LIMIT_BV")
                     return;
 
+                //bool executeOtherLeg = false;
+                //int netHolding = GetNetPosition();
+                //if (netHolding >= Math.Min(bids[limitBuy.index].qty / 2, GetMaxCrossVolume()) - 1)
+                //    executeOtherLeg = true;
+                //else if (-netHolding >= Math.Max(asks[limitSell.index].qty / 2, GetMaxCrossVolume()) - 1)
+                //    executeOtherLeg = true;
+                //if (executeOtherLeg)
                 ExecuteOtherLegAtMarket(instrumentIndex, amount);
             }
             catch (Exception e)
