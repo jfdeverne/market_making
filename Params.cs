@@ -3,34 +3,26 @@ using System.Text.RegularExpressions;
 using System.Reflection;
 
 namespace StrategyRunner
-{   
+{
     public static class P
     {
-        public static double eus1 = 0;
-        public static double eus2 = 0;
-        public static double eus3 = 0;
-        public static double eus4 = 0;
-        public static double eus5 = 0;
-        public static double eus6 = 0;
-
+        public static double targetPriceDriftFactor = 0.9999;
         public static int maxTradeSize = 0;
 
         public static int maxOutrights = 0;
+        public static int maxPosNear = -150; //BY DEFINING IT TO BE NEGATIVE WE ENSURE WE WILL BUY AT LEAST 150 FAR BEFORE CONSIDER SELLING
+        public static int minPosNear = -250;
+        public static int maxPosFar = 250;
+        public static int minPosFar = 150;
 
-        public static double joinFactor = 0;
-        public static double joinFactorAllVenues = 0;
-
-        public static int desiredEus1 = 0;
-        public static int desiredEus2 = 0;
-        public static int desiredEus3 = 0;
-        public static int desiredEus4 = 0;
-        public static int desiredEus5 = 0;
-        public static int desiredEus6 = 0;
+        public static double joinFactor = 1;
+        public static double joinFactorAllVenues = 5;
+        public static bool enableAsymmetricQuoting = true;
 
         public static double creditOffset = 0;
 
         public static int baseSpreadThrottleVolume = 0;
-        public static int baseSpreadThrottleSeconds = 0;
+        public static double baseSpreadThrottleSeconds = 0;
 
         public static int maxCrossVolume = 0;
 
@@ -38,10 +30,10 @@ namespace StrategyRunner
         public static bool limitBvEnabled = false;
 
         public static int bvThrottleVolume = 0;
-        public static int bvThrottleSeconds = 0;
+        public static double bvThrottleSeconds = 0;
 
         public static int quoteThrottleVolume = 0;
-        public static int quoteThrottleSeconds = 0;
+        public static double quoteThrottleSeconds = 0;
 
         public static double bvTimeoutSeconds = 0;
         public static double bvMaxLoss = 0;
@@ -49,6 +41,19 @@ namespace StrategyRunner
 
         public static double spreaderTargetPrice = 0;
         public static int spreaderStepSize = 10;
+
+        public static double maxLossMarketHedge = 0.001;
+        public static double maxLossLimitHedge = 0.001;
+
+        public static int eurexThrottleVolume = 100000;
+        public static double eurexThrottleSeconds = 1;
+
+        public static int bfTriggerVolume = 100;
+        public static int bfTriggerTradeCount = 5;
+        public static double bfTriggerSeconds = 5;
+        public static double bfTimeoutSeconds = 30;
+
+        public static string logLevel = "info";
 
         public static string GetParamsStr()
         {

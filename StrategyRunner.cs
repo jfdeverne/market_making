@@ -6,6 +6,9 @@ using StrategyLib;
 using System.IO;
 using System.Reflection;
 using Mapack;
+using System.Xml.Linq;
+using System.Globalization;
+using System.Text;
 
 namespace Detail
 {
@@ -54,9 +57,10 @@ namespace Throttler
             mMaxVolume = maxVolume;
         }
 
-        public void updateTimespan(int seconds)
+        public void updateTimespan(double seconds)
         {
-            TimeSpan ts = new TimeSpan(0,0,0,0,seconds*1000);
+            double ms = seconds * 1000;
+            TimeSpan ts = new TimeSpan(0, 0, 0, 0, (int)ms);
             mTime = ts;
         }
 
@@ -84,6 +88,144 @@ namespace Throttler
             }
         }
     }
+
+    public class EurexThrottler
+    {
+        private int mMaxOrderCount;
+        private TimeSpan mTime;
+        private readonly Queue<DateTime> mOrderTimestamps;
+        int mCurrentCount;
+
+        public EurexThrottler(int maxOrderCount, TimeSpan time)
+        {
+            mMaxOrderCount = maxOrderCount;
+            mTime = time;
+            mOrderTimestamps = new Queue<DateTime>();
+            mCurrentCount = 0;
+        }
+
+        public void updateMaxVolume(int maxOrderCount)
+        {
+            mMaxOrderCount = maxOrderCount;
+        }
+
+        public void updateTimespan(double seconds)
+        {
+            double ms = seconds * 1000;
+            TimeSpan ts = new TimeSpan(0, 0, 0, 0, (int)ms);
+            mTime = ts;
+        }
+
+        public bool addTrade()
+        {
+            CleanExpired();
+
+            if (mCurrentCount++ > mMaxOrderCount)
+            {
+                return false;
+            }
+
+            mOrderTimestamps.Enqueue(DateTime.UtcNow);
+
+            return true;
+        }
+
+        private void CleanExpired()
+        {
+            while (mOrderTimestamps.Count > 0)
+            {
+                try
+                {
+                    if (DateTime.UtcNow - mOrderTimestamps.Peek() > mTime)
+                    {
+                        mOrderTimestamps.Dequeue();
+                        mCurrentCount--;
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+namespace VolumeDetector
+{
+    public class VolumeDetector
+    {
+        private int mTriggerVolume;
+        private int mTriggerTradeCount;
+        private TimeSpan mTime;
+        private readonly Queue<Tuple<DateTime, int>> mVolumePerTimestamp;
+        int mCurrentVolume;
+        double mLastPrice = -11;
+
+        public VolumeDetector(int triggerVolume, int triggerTradeCount, TimeSpan time)
+        {
+            mTriggerVolume = triggerVolume;
+            mTriggerTradeCount = triggerTradeCount;
+            mTime = time;
+            mVolumePerTimestamp = new Queue<Tuple<DateTime, int>>();
+            mCurrentVolume = 0;
+        }
+
+        public void updateTriggerVolume(int triggerVolume)
+        {
+            mTriggerVolume = triggerVolume;
+        }
+
+        public void updateTriggerTradeCount(int triggerTradeCount)
+        {
+            mTriggerTradeCount = triggerTradeCount;
+        }
+
+        public void updateTimespan(double seconds)
+        {
+            double ms = seconds * 1000;
+            TimeSpan ts = new TimeSpan(0, 0, 0, 0, (int)ms);
+            mTime = ts;
+        }
+
+        public bool addTrade(int volume, double price)
+        {
+            if (mLastPrice == -11)
+            {
+                mLastPrice = price;
+            }
+            else if (price != mLastPrice)
+            {
+                mVolumePerTimestamp.Clear();
+                mCurrentVolume = 0;
+            }
+
+            CleanExpired();
+
+            if (mCurrentVolume + volume >= mTriggerVolume  && mVolumePerTimestamp.Count >= mTriggerTradeCount)
+            {
+                return true; //BF trigger
+            }
+
+            mVolumePerTimestamp.Enqueue(new Tuple<DateTime, int>(DateTime.UtcNow, volume));
+            mCurrentVolume += volume;
+
+            return false;
+        }
+
+        private void CleanExpired()
+        {
+            while (mVolumePerTimestamp.Count > 0 && DateTime.UtcNow - mVolumePerTimestamp.Peek().Item1 > mTime)
+            {
+                var expired = mVolumePerTimestamp.Dequeue();
+                mCurrentVolume -= expired.Item2;
+            }
+        }
+    }
 }
 
 public class Box
@@ -92,6 +234,7 @@ public class Box
     public int[] indices = new int[4];
     public double ICM;
     public double targetPrice;
+    public int linkedStgID;
     public Box(int[] Indices, int Holding = 0)
     {
         holding = Holding;
@@ -121,6 +264,7 @@ namespace StrategyRunner
         IMatrix boxTargetPrices; //y
         IMatrix outrightICMs; //xICM
         IMatrix outrightTargetPrices; //x = xICM + VTVVTInv*(y-V*xICM)
+        Dictionary<int, double> outrightTargetPricesMap;
 
         IMatrix boxHoldings;
         List<int> quoteIndices;
@@ -140,6 +284,11 @@ namespace StrategyRunner
 
         public static List<VariableInfo> vars = new List<VariableInfo>();
 
+        public static double eurexThrottleSeconds = -1;
+        public static int eurexThrottleVolume = -1;
+        Throttler.EurexThrottler eurexThrottler;
+
+        Dictionary<string, int> volumePerInstrument;
 
         StrategyRunner()
         {
@@ -153,7 +302,14 @@ namespace StrategyRunner
                     gitVersion = reader.ReadToEnd();
                 }
             }
+            double ms = GetEurexThrottleSeconds() * 1000;
+            TimeSpan t = new TimeSpan(0, 0, 0, 0, (int)ms);
+            eurexThrottler = new Throttler.EurexThrottler(GetEurexThrottleVolume(), t);
+
+            volumePerInstrument = new Dictionary<string, int>();
+
             strategies = new Dictionary<int, Strategy>();
+            outrightTargetPricesMap = new Dictionary<int, double>();
             //setConsoleWindowVisibility(false, Console.Title);
             AppDomain.CurrentDomain.UnhandledException += new UnhandledExceptionEventHandler(GenericErrorHandler);
 
@@ -182,33 +338,76 @@ namespace StrategyRunner
             }
 
             API.Log(String.Format("git version={0}", gitVersion));
-            API.Log("mm-1.1.0");
 
             API.Connect();
         }
 
+        private double GetEurexThrottleSeconds()
+        {
+            if (eurexThrottleSeconds == -1)
+                return P.eurexThrottleSeconds;
+            return eurexThrottleSeconds;
+        }
+
+        private int GetEurexThrottleVolume()
+        {
+            if (eurexThrottleVolume == -1)
+                return P.eurexThrottleVolume;
+            return eurexThrottleVolume;
+        }
+
         private void API_OnStrategyParamUpdate(string paramName, string paramVal)
         {
-            int sInd = paramName.IndexOf('.') - 1;
-            int strategyIndex = Int32.Parse(paramName.Substring(1, sInd));
-            if (!strategies.ContainsKey(strategyIndex))
+            try
             {
-                API.SendToRemote("[Variable ERR:" + paramName + "] strategy index doesnt exist", KGConstants.EVENT_ERROR);
-                return;
+                int sInd = paramName.IndexOf('.') - 1;
+                int strategyIndex = Int32.Parse(paramName.Substring(1, sInd));
+
+                if (strategyIndex == 0)
+                {
+                    paramName = paramName.Substring(sInd + 2);
+                    P.SetValue(paramName, paramVal);
+                    if (paramName == "eurexThrottleVolume")
+                        eurexThrottler.updateMaxVolume(GetEurexThrottleVolume());
+                    if (paramName == "eurexThrottleSeconds")
+                        eurexThrottler.updateTimespan(GetEurexThrottleSeconds());
+                    
+                    foreach (var strategy in strategies)
+                    {
+                        strategy.Value.OnGlobalParamsUpdate();
+                    }
+                    
+                    return;
+                }
+
+                if (!strategies.ContainsKey(strategyIndex))
+                {
+                    API.SendToRemote("[Variable ERR:" + paramName + "] strategy index doesnt exist", KGConstants.EVENT_ERROR);
+                    return;
+                }
+
+                paramName = paramName.Substring(sInd + 2);
+                strategies[strategyIndex].OnParamsUpdate(paramName, paramVal);
+
+                API.Log("Setting parameter value:" + paramName + "," + paramVal);
             }
-            paramName = paramName.Substring(sInd + 2);
-            P.SetValue(paramName, paramVal);
-
-            foreach (var strategy in strategies.Values)
-                strategy.OnParamsUpdate();
-
-            API.Log("Setting parameter value:" + paramName + "," + paramVal);
+            catch (Exception e)
+            {
+                API.Log("Exception OnParamUpdate: " + e.ToString() + "," + e.StackTrace);
+            }
         }
 
         private void API_OnStrategyParamRequest()
         {
-            string line = P.GetParamsStr();
-            API.UpdateParams(line);
+            try
+            {
+                string line = P.GetParamsStr();
+                API.UpdateParams(line);
+            }
+            catch (Exception e)
+            {
+                API.Log("Exception OnParamRequest: " + e.ToString() + "," + e.StackTrace);
+            }
         }
 
         private void API_OnStrategyVariableRequest(string varName, string arrayIndicesStr)
@@ -340,108 +539,290 @@ namespace StrategyRunner
 
         private void API_OnSystemTradingMode(char c)
         {
-            foreach (KeyValuePair<int, Strategy> kv in strategies)
+            try
             {
-                kv.Value.OnSystemTradingMode(ref c);
+                foreach (KeyValuePair<int, Strategy> kv in strategies)
+                {
+                    kv.Value.OnSystemTradingMode(ref c);
+                }
+            }
+            catch (Exception e)
+            {
+                API.Log("Exception OnSystemTradingMode: " + e.ToString() + "," + e.StackTrace);
             }
         }
 
         private void API_OnPurgedOrder(KGOrder ord)
         {
-            if (strategies.ContainsKey(ord.stgID))
+            try
             {
-                strategies[ord.stgID].OnPurgedOrder(ord);
+                if (strategies.ContainsKey(ord.stgID))
+                {
+                    strategies[ord.stgID].OnPurgedOrder(ord);
+                }
+            }
+            catch (Exception e)
+            {
+                API.Log("Exception OnPurgedOrder: " + e.ToString() + "," + e.StackTrace);
             }
         }
 
         private void API_OnConnect()
         {
-            API.Log("Connected");
-            string pathQuoter = Directory.GetCurrentDirectory() + "/quoter_config";
-            var filesQuoter = Directory.GetFiles(pathQuoter, "*.xml", SearchOption.TopDirectoryOnly);
-
-            string pathBV = Directory.GetCurrentDirectory() + "/bv_config";
-            var filesBV = Directory.GetFiles(pathBV, "*.xml", SearchOption.TopDirectoryOnly);
-
-            quoteIndices = new List<int>();
-            quoteFarIndices = new List<int>();
-            leanIndices = new List<int>();
-            boxes = new List<Box>();
-
-            foreach (var file in filesQuoter)
+            try
             {
-                Strategy s = new Quoter(API, file);
-                strategies[s.stgID] = s;
-            }
+                API.Log("Connected");
+                string pathQuoter = Directory.GetCurrentDirectory() + "/quoter.xml";
+                string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
+                string pathBackup = Directory.GetCurrentDirectory() + "/ZZZ_backup_quoter_" + timestamp + ".xml";
 
-            int ii = 0;
-            foreach (var file in filesBV)
-            {
-                Strategy s = new BV(API, file);
-                strategies[s.stgID] = s;
+                File.Copy(pathQuoter, pathBackup, overwrite: true);
 
-                if (API.GetSecurityNumber(s.quoteIndex, 0).Length > 9) //NOT OUTRIGHT
+                var doc = XDocument.Load(pathQuoter);
+
+                quoteIndices = new List<int>();
+                quoteFarIndices = new List<int>();
+                leanIndices = new List<int>();
+                boxes = new List<Box>();
+
+                int ii = 0;
+
+                foreach (var quoter in doc.Descendants("Quoter"))
                 {
-                    quoteIndices.Add(s.quoteIndex);
-                    quoteFarIndices.Add(s.quoteFarIndex);
-                    leanIndices.Add(s.leanIndex);
-                    strategies[s.stgID].linkedBoxIndex = ii; //LINKING THE RELEVANT BOX ENTRY IN THE boxes ARRAYS
-                    ii++;
+                    QuoterConfig config = new QuoterConfig
+                    {
+                        width = (double)quoter.Element("width"),
+                        size = (int)quoter.Element("size"),
+                        leanInstrument = (string)quoter.Element("leanInstrument"),
+                        quoteInstrument = (string)quoter.Element("quoteInstrument"),
+                        icsInstrument = (string)quoter.Element("ics"),
+                        asymmetricQuoting = (bool?)quoter.Element("asymmetricQuoting"),
+                        defaultBaseSpread = (double?)quoter.Element("defaultBaseSpread"),
+                        limitPlusSize = (int?)quoter.Element("limitPlusSize"),
+                        nonLeanLimitPlusSize = (int?)quoter.Element("nonLeanLimitPlusSize"),
+                        crossVenueInstruments = new List<string>(),
+                        correlatedInstruments = new List<string>()
+                    };
+
+                    foreach (var hedgeInstrument in quoter.Elements("hedgeInstrument"))
+                    {
+                        if (hedgeInstrument.Attribute("class").Value == "correlated")
+                        {
+                            config.correlatedInstruments.Add((string)hedgeInstrument);
+                        }
+                        else if (hedgeInstrument.Attribute("class").Value == "crossVenue")
+                        {
+                            config.crossVenueInstruments.Add((string)hedgeInstrument);
+                        }
+                    }
+
+                    config.crossVenueInstruments.Add(config.quoteInstrument);
+
+                    var leanEl = quoter.Element("leanInstrument");
+                    if (leanEl.Attribute("class").Value == "correlated")
+                    {
+                        config.correlatedInstruments.Add(config.leanInstrument);
+                    }
+                    else if (leanEl.Attribute("class").Value == "crossVenue")
+                    {
+                        config.crossVenueInstruments.Add(config.leanInstrument);
+                    }
+
+                    Strategy s = new Quoter(API, config, eurexThrottler);
+                    strategies[s.stgID] = s;
+                }
+
+                string pathBV = Directory.GetCurrentDirectory() + "/bv.xml";
+
+                string pathBackupBV = Directory.GetCurrentDirectory() + "/ZZZ_backup_bv_" + timestamp + ".xml";
+                File.Copy(pathBV, pathBackupBV, overwrite: true);
+
+                var docBV = XDocument.Load(pathBV);
+
+
+                ii = 0;
+
+                foreach (var bv in docBV.Descendants("BV"))
+                {
+                    BVConfig config = new BVConfig
+                    (
+                        (string)bv.Element("nearInstrument"),
+                        (string)bv.Element("farInstrument"),
+                        (string)bv.Element("leanInstrument"),
+                        (int?)bv.Element("limitPlusSize"),
+                        (int?)bv.Element("nonLeanLimitPlusSize"),
+                        (double?)bv.Element("defaultBaseSpread")
+                    );
+
+                    foreach (var hedgeInstrument in bv.Elements("hedgeInstrument"))
+                    {
+                        if (hedgeInstrument.Attribute("class").Value == "correlated")
+                        {
+                            config.correlatedInstruments.Add((string)hedgeInstrument);
+                        }
+                        else if (hedgeInstrument.Attribute("class").Value == "crossVenue")
+                        {
+                            config.crossVenueInstruments.Add((string)hedgeInstrument);
+                        }
+                    }
+
+                    config.crossVenueInstruments.Add(config.nearInstrument);
+
+                    var leanEl = bv.Element("leanInstrument");
+                    if (leanEl.Attribute("class").Value == "correlated")
+                    {
+                        config.correlatedInstruments.Add(config.leanInstrument);
+                    }
+                    else if (leanEl.Attribute("class").Value == "crossVenue")
+                    {
+                        config.crossVenueInstruments.Add(config.leanInstrument);
+                    }
+
+                    var farEl = bv.Element("farInstrument");
+                    if (farEl.Attribute("class").Value == "correlated")
+                    {
+                        config.correlatedInstruments.Add(config.farInstrument);
+                    }
+                    else if (farEl.Attribute("class").Value == "crossVenue")
+                    {
+                        config.crossVenueInstruments.Add(config.farInstrument);
+                    }
+
+                    Strategy s = new BV(API, config, eurexThrottler);
+                    strategies[s.stgID] = s;
+                }
+
+                foreach (var bv in docBV.Descendants("LimitBV"))
+                {
+                    BVConfig config = new BVConfig
+                    (
+                        (string)bv.Element("nearInstrument"),
+                        (string)bv.Element("farInstrument"),
+                        (string)bv.Element("leanInstrument"),
+                        (int?)bv.Element("limitPlusSize"),
+                        (int?)bv.Element("nonLeanLimitPlusSize"),
+                        (double?)bv.Element("defaultBaseSpread")
+                    );
+
+                    foreach (var hedgeInstrument in bv.Elements("hedgeInstrument"))
+                    {
+                        if (hedgeInstrument.Attribute("class").Value == "correlated")
+                        {
+                            config.correlatedInstruments.Add((string)hedgeInstrument);
+                        }
+                        else if (hedgeInstrument.Attribute("class").Value == "crossVenue")
+                        {
+                            config.crossVenueInstruments.Add((string)hedgeInstrument);
+                        }
+                    }
+
+                    config.crossVenueInstruments.Add(config.nearInstrument);
+
+                    var leanEl = bv.Element("leanInstrument");
+                    if (leanEl.Attribute("class").Value == "correlated")
+                    {
+                        config.correlatedInstruments.Add(config.leanInstrument);
+                    }
+                    else if (leanEl.Attribute("class").Value == "crossVenue")
+                    {
+                        config.crossVenueInstruments.Add(config.leanInstrument);
+                    }
+
+                    var farEl = bv.Element("farInstrument");
+                    if (farEl.Attribute("class").Value == "correlated")
+                    {
+                        config.correlatedInstruments.Add(config.farInstrument);
+                    }
+                    else if (farEl.Attribute("class").Value == "crossVenue")
+                    {
+                        config.crossVenueInstruments.Add(config.farInstrument);
+                    }
+
+                    Strategy s = new LimitBV(API, config, eurexThrottler);
+                    strategies[s.stgID] = s;
+
+                    //if (API.GetSecurityNumber(s.quoteIndex, 0).Length > 9) //NOT OUTRIGHT
+                    if (s.boxTargetPrice != 0) //CAREFUL - MUST NOT PUT AN EXACT 0.0 IN THE XML
+                    {
+                        quoteIndices.Add(s.quoteIndex);
+                        quoteFarIndices.Add(s.farIndex);
+                        leanIndices.Add(s.leanIndex);
+                        strategies[s.stgID].linkedBoxIndex = ii; //LINKING THE RELEVANT BOX ENTRY IN THE boxes ARRAYS
+                        API.SetBoxTargetPrice(s.stgID, s.boxTargetPrice);
+                        Combo combos = API.GetCombos(quoteIndices[ii]);
+                        Combo leanCombos = API.GetCombos(leanIndices[ii]);
+
+
+
+
+                        boxIndices = new int[4]; //leg1, leg2 of 1st calendar spread, then leg1 and leg2 of the 2nd cal spread
+                        boxIndices[0] = (combos.spreadList[0].buyLeg) % API.n;
+                        boxIndices[1] = (combos.spreadList[0].sellLeg) % API.n;
+                        boxIndices[2] = (leanCombos.spreadList[0].buyLeg) % API.n;
+                        boxIndices[3] = (leanCombos.spreadList[0].sellLeg) % API.n;
+                        boxes.Add(new Box(boxIndices));
+                        boxes[ii].targetPrice = API.GetBoxTargetPrice(s.stgID);
+                        boxes[ii].linkedStgID = s.stgID;
+                        ii++;
+                    }
+                }
+
+                NBoxes = quoteIndices.Count;
+                boxHoldings = new Matrix(NBoxes, 1);
+                //boxIndices = new int[4]; //leg1, leg2 of 1st calendar spread, then leg1 and leg2 of the 2nd cal spread
+                outrightIndices = new int[2 * (NBoxes + 1)];
+                V = new Matrix(NBoxes, 2 * (NBoxes + 1));
+                beta = new Matrix(2 * (NBoxes + 1), 1);
+                boxTargetPrices = new Matrix(NBoxes, 1);
+                outrightICMs = new Matrix(2 * (NBoxes + 1), 1);
+                outrightTargetPrices = new Matrix(2 * (NBoxes + 1), 1);
+
+
+                for (int i = 0; i < NBoxes; i++)
+                {
+                    V[i, i] = 1;
+                    V[i, i + 1] = -1;
+                    V[i, i + NBoxes + 1] = -1;
+                    V[i, i + NBoxes + 2] = 1;
+                    Combo combos = API.GetCombos(quoteIndices[i]);
+                    Combo leanCombos = API.GetCombos(leanIndices[i]);
+                    
+                    //WE PRESUME THAT i's sellLeg is (i+1)'s buyLeg:
+                    if (i == 0)
+                    {
+                        outrightIndices[0] = combos.spreadList[0].buyLeg % API.n; 
+                        outrightIndices[NBoxes + 1] = leanCombos.spreadList[0].buyLeg % API.n;
+                        outrightTargetPricesMap.Add(outrightIndices[0], 0);
+                        outrightTargetPricesMap.Add(outrightIndices[NBoxes + 1], 0);
+                    }
+                    outrightIndices[i + 1] = combos.spreadList[0].sellLeg % API.n;
+                    outrightIndices[i + 1 + NBoxes + 1] = leanCombos.spreadList[0].sellLeg % API.n;
+                    outrightTargetPricesMap.Add(outrightIndices[i+1], 0);
+                    outrightTargetPricesMap.Add(outrightIndices[i + 1 + NBoxes + 1], 0);
+                }
+
+                if (1 == 1)
+                {
+                    for (int j = 0; j < NBoxes; j++)
+                    {
+                        Combo combos = API.GetCombos(quoteIndices[j]);
+                        Combo farCombos = API.GetCombos(quoteFarIndices[j]);
+                        Combo leanCombos = API.GetCombos(leanIndices[j]);
+                        beta[j, 0] = API.GetOutrightPos(combos.spreadList[0].buyLeg) + API.GetOutrightPos(farCombos.spreadList[0].buyLeg);
+                        beta[j + 1, 0] = API.GetOutrightPos(combos.spreadList[0].sellLeg) + API.GetOutrightPos(farCombos.spreadList[0].sellLeg);
+                        beta[j + NBoxes + 1, 0] = API.GetOutrightPos(leanCombos.spreadList[0].buyLeg);
+                        beta[j + NBoxes + 2, 0] = API.GetOutrightPos(leanCombos.spreadList[0].sellLeg);
+                    }
+                    VVTInv = (V.Multiply(V.Transpose())).Inverse;
+                    boxHoldings = VVTInv.Multiply(V.Multiply(beta));
+                    VTVVTInv = V.Transpose().Multiply(VVTInv);
+                    for (int j = 0; j < NBoxes; j++)
+                        boxes[j].holding = (int)boxHoldings[j, 0];
                 }
             }
-
-            NBoxes = quoteIndices.Count;
-            //firstOutright = API.GetSecurityIndex(P.firstContract, 0);
-            //firstIndex = API.GetSecurityIndex(P.firstContract + "_DBFLY", 0);
-            boxHoldings = new Matrix(NBoxes, 1);
-            boxIndices = new int[4]; //leg1, leg2 of 1st calendar spread, then leg1 and leg2 of the 2nd cal spread
-            outrightIndices = new int[2 * (NBoxes + 1)];
-            V = new Matrix(NBoxes, 2 * (NBoxes + 1));
-            beta = new Matrix(2 * (NBoxes + 1), 1);
-            boxTargetPrices = new Matrix(NBoxes, 1);
-            outrightICMs = new Matrix(2 * (NBoxes + 1), 1);
-            outrightTargetPrices = new Matrix(2 * (NBoxes + 1), 1);
-
-            for (int i = 0; i < NBoxes; i++)
+            catch (Exception e)
             {
-                V[i, i] = 1;
-                V[i, i + 1] = -1;
-                V[i, i + NBoxes + 1] = -1;
-                V[i, i + NBoxes + 2] = 1;
-                Combo combos = API.GetCombos(quoteIndices[i]);
-                Combo leanCombos = API.GetCombos(leanIndices[i]);
-                boxIndices[0] = (combos.spreadList[0].buyLeg) % API.n;
-                boxIndices[1] = (combos.spreadList[0].sellLeg) % API.n;
-                boxIndices[2] = (leanCombos.spreadList[0].buyLeg) % API.n;
-                boxIndices[3] = (leanCombos.spreadList[0].sellLeg) % API.n;
-                boxes.Add(new Box(boxIndices));
-                //WE PRESUME THAT i's sellLeg is (i+1)'s buyLeg:
-                if (i == 0)
-                {
-                    outrightIndices[0] = combos.spreadList[0].buyLeg;
-                    outrightIndices[NBoxes + 1] = leanCombos.spreadList[0].buyLeg;
-                }
-                outrightIndices[i + 1] = combos.spreadList[0].sellLeg;
-                outrightIndices[i + 1 + NBoxes + 1] = leanCombos.spreadList[0].sellLeg;
-            }
-
-            if (1 == 1)
-            {
-                for (int j = 0; j < NBoxes; j++)
-                {
-                    Combo combos = API.GetCombos(quoteIndices[j]);
-                    Combo farCombos = API.GetCombos(quoteFarIndices[j]);
-                    Combo leanCombos = API.GetCombos(leanIndices[j]);
-                    beta[j, 0] = API.GetOutrightPos(combos.spreadList[0].buyLeg) + API.GetOutrightPos(farCombos.spreadList[0].buyLeg);
-                    beta[j + 1, 0] = API.GetOutrightPos(combos.spreadList[0].sellLeg) + API.GetOutrightPos(farCombos.spreadList[0].sellLeg);
-                    beta[j + NBoxes + 1, 0] = API.GetOutrightPos(leanCombos.spreadList[0].buyLeg);
-                    beta[j + NBoxes + 2, 0] = API.GetOutrightPos(leanCombos.spreadList[0].sellLeg);
-                }
-                VVTInv = (V.Multiply(V.Transpose())).Inverse;
-                boxHoldings = VVTInv.Multiply(V.Multiply(beta));
-                VTVVTInv = V.Transpose().Multiply(VVTInv);
-                for (int j = 0; j < NBoxes; j++)
-                    boxes[j].holding = (int)boxHoldings[j, 0];
+                API.Log("Exception OnConnect: " + e.ToString() + "," + e.StackTrace);
             }
         }
 
@@ -454,31 +835,62 @@ namespace StrategyRunner
 
         static void GenericErrorHandler(object sender, UnhandledExceptionEventArgs e)
         {
-            API.Log("ERR:" + "GenericErrorHandler - Exiting...", true);
+            API.Log("GenericErrorHandler - Exiting... Reason:" + (e.ExceptionObject as Exception).Message + "::-->" + (e.ExceptionObject as Exception).StackTrace, true);
             System.Environment.Exit(-1);
         }
-
         private void API_OnStatusChanged(int status, int stgID)
         {
-            if (strategies.ContainsKey(stgID))
+            try
             {
-                strategies[stgID].OnStatusChanged(status);
+                if (strategies.ContainsKey(stgID))
+                {
+                    strategies[stgID].OnStatusChanged(status);
+                }
+            }
+            catch (Exception e)
+            {
+                API.Log("Exception OnStatusChanged: " + e.ToString() + "," + e.StackTrace);
             }
         }
 
         private void API_OnFlush()
         {
-            foreach (KeyValuePair<int, Strategy> kv in strategies)
+            try
             {
-                kv.Value.OnFlush();
+                foreach (KeyValuePair<int, Strategy> kv in strategies)
+                {
+                    kv.Value.OnFlush();
+                }
+
+                StringBuilder csvContent = new StringBuilder();
+
+                csvContent.AppendLine("instrument,volume");
+
+                foreach (var pair in volumePerInstrument)
+                {
+                    csvContent.AppendLine($"{(pair.Key)},{pair.Value}");
+                }
+
+                File.WriteAllText("volumes.csv", csvContent.ToString());
+            }
+            catch (Exception e)
+            {
+                API.Log("Exception OnFlush: " + e.ToString() + "," + e.StackTrace);
             }
         }
 
         private void API_OnOrder(KGOrder ord)
         {
-            if (strategies.ContainsKey(ord.stgID))
+            try
             {
-                strategies[ord.stgID].OnOrder(ord);
+                if (strategies.ContainsKey(ord.stgID))
+                {
+                    strategies[ord.stgID].OnOrder(ord);
+                }
+            }
+            catch (Exception e)
+            {
+                API.Log("Exception OnOrder: " + e.ToString() + "," + e.StackTrace);
             }
         }
 
@@ -486,54 +898,111 @@ namespace StrategyRunner
         {
             try
             {
-                if (strategies.ContainsKey(stgID))
+                if (strategies[stgID].linkedBoxIndex > -1)
                 {
-                    if (strategies[stgID].linkedBoxIndex > -1)
-                    {
-                        boxes[strategies[stgID].linkedBoxIndex].targetPrice = API.GetBoxTargetPrice(stgID);
-                        strategies[stgID].boxTargetPrice = boxes[strategies[stgID].linkedBoxIndex].targetPrice;
-                    }
-                    else
-                    {
-                        for (int i = 0; i < NBoxes; i++)
-                        {
-                            boxes[i].ICM = API.GetImprovedCM(boxIndices[0]) - API.GetImprovedCM(boxIndices[1]) - (API.GetImprovedCM(boxIndices[2]) - API.GetImprovedCM(boxIndices[3]));
-                            boxTargetPrices[i, 0] = boxes[i].targetPrice;
-                        }
-                        for (int i = 0; i < outrightIndices.Length; i++)
-                        {
-                            outrightICMs[i, 0] = API.GetImprovedCM(outrightIndices[i]);
-                        }
-
-                        outrightTargetPrices = outrightICMs.Addition(VTVVTInv.Multiply(boxTargetPrices.Subtraction(V.Multiply(outrightICMs))));
-                        if (strategies.ContainsKey(stgID))
-                        {
-                            double targetBoxPrice = 0;
-                            for (int i = 0; i < outrightIndices.Length; i++)
-                            {
-                                if (strategies[stgID].quoteIndex == outrightIndices[i])
-                                    targetBoxPrice += outrightTargetPrices[i, 0];
-                                else if (strategies[stgID].leanIndex == outrightIndices[i])
-                                    targetBoxPrice -= outrightTargetPrices[i, 0];
-                            }
-                            strategies[stgID].boxTargetPrice = targetBoxPrice;
-                        }
-                    }
-
-                    strategies[stgID].OnProcessMD(vi);
+                    boxes[strategies[stgID].linkedBoxIndex].targetPrice = API.GetBoxTargetPrice(stgID);
+                    strategies[stgID].boxTargetPrice = boxes[strategies[stgID].linkedBoxIndex].targetPrice;
+                    strategies[stgID].correlatedSpreadTargetPrice = strategies[stgID].boxTargetPrice;
                 }
+                else
+                {
+                    for (int i = 0; i < NBoxes; i++)
+                    {
+                        boxes[i].targetPrice = API.GetBoxTargetPrice(boxes[i].linkedStgID);
+                        boxIndices = boxes[i].indices;
+                        boxes[i].ICM = API.GetImprovedCM(boxIndices[0]) - API.GetImprovedCM(boxIndices[1]) - (API.GetImprovedCM(boxIndices[2]) - API.GetImprovedCM(boxIndices[3]));
+                        if (Math.Abs(boxes[i].ICM - boxes[i].targetPrice) < 0.1) //PRECAUTION AGAINST OUTLAYERS
+                            boxes[i].targetPrice = P.targetPriceDriftFactor * boxes[i].targetPrice + (1 - P.targetPriceDriftFactor) * boxes[i].ICM;
+                        boxTargetPrices[i, 0] = boxes[i].targetPrice;
+                        API.SetBoxTargetPrice(boxes[i].linkedStgID, boxes[i].targetPrice);
+                    }
+                    for (int i = 0; i < outrightIndices.Length; i++)
+                    {
+                        outrightICMs[i, 0] = API.GetImprovedCM(outrightIndices[i]);
+                    }
+
+                    outrightTargetPrices = outrightICMs.Addition(VTVVTInv.Multiply(boxTargetPrices.Subtraction(V.Multiply(outrightICMs))));
+                    for (int i = 0; i < outrightIndices.Length; i++)
+                        outrightTargetPricesMap[outrightIndices[i]] = outrightTargetPrices[i,0];
+
+                    if (strategies.ContainsKey(stgID))
+                    {
+                        double targetBoxPrice = 0;
+                        if (strategies[stgID].correlatedIndices.Count > 0)
+                        {
+                            Combo firstCombos = API.GetCombos(strategies[stgID].quoteIndex);
+                            Combo secondCombos = API.GetCombos(strategies[stgID].correlatedIndices[0]);
+                            if ((firstCombos.spreadList.Count > 0) && (secondCombos.spreadList.Count > 0))
+                            {
+                                targetBoxPrice += outrightTargetPricesMap[firstCombos.spreadList[0].buyLeg % API.n];
+                                targetBoxPrice -= outrightTargetPricesMap[firstCombos.spreadList[0].sellLeg % API.n];
+                                targetBoxPrice -= outrightTargetPricesMap[secondCombos.spreadList[0].buyLeg % API.n];
+                                targetBoxPrice += outrightTargetPricesMap[secondCombos.spreadList[0].sellLeg % API.n];
+                            }
+                            else
+                            {
+                                targetBoxPrice += outrightTargetPricesMap[strategies[stgID].quoteIndex % API.n];
+                                targetBoxPrice -= outrightTargetPricesMap[strategies[stgID].correlatedIndices[0] % API.n];
+                            }
+                        }
+                        strategies[stgID].correlatedSpreadTargetPrice = targetBoxPrice;
+                        if (strategies[stgID].correlatedIndices.Contains(strategies[stgID].leanIndex))
+                            strategies[stgID].boxTargetPrice = targetBoxPrice;
+                        else
+                            strategies[stgID].boxTargetPrice = 0;
+                    }
+                }
+                if (strategies.ContainsKey(stgID))
+                    strategies[stgID].OnProcessMD(vi);
             }
             catch (Exception e)
             {
-                API.SendToRemote(String.Format("API_OnProcessMD: {0}", e.Message), KGConstants.EVENT_ERROR);
+                API.Log("Exception OnDeal: " + e.ToString() + "," + e.StackTrace);
             }
         }
 
         private void API_OnDeal(KGDeal deal)
         {
-            if (strategies.ContainsKey(deal.stgID))
+            try
             {
-                strategies[deal.stgID].OnDeal(deal);
+                int instrumentIndex = deal.index + API.n * deal.VenueID;
+                if (strategies.ContainsKey(deal.stgID))
+                {
+                    strategies[deal.stgID].OnDeal(deal);
+                }
+                else if (deal.stgID == -1)
+                {
+                    API.Log("deal with unknown strategy, working around");
+                    for (int i = strategies.Count; i >= 0; i--)
+                    {
+                        var strategy = strategies[i];
+                        if (strategy.correlatedIndices.Contains(instrumentIndex) || strategy.crossVenueIndices.Contains(instrumentIndex))
+                        {
+                            strategy.OnDeal(deal);
+                        }
+                    }
+                }
+
+                if (deal.source == "INTERNAL" || deal.source == "FW")
+                    return;
+
+                var instrument = API.GetSecurityNumber(instrumentIndex, deal.VenueID);
+                var amount = deal.amount;
+                if (instrument.Length > 9)
+                    amount *= 2;
+
+                if (volumePerInstrument.ContainsKey(instrument))
+                {
+                    volumePerInstrument[instrument] += amount;
+                }
+                else
+                {
+                    volumePerInstrument.Add(instrument, amount);
+                }
+            }
+            catch (Exception e)
+            {
+                API.Log("Exception OnDeal: " + e.ToString() + "," + e.StackTrace);
             }
         }
 

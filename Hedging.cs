@@ -1,117 +1,64 @@
 ﻿using Detail;
 using KGClasses;
+using StrategyLib;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 
 namespace Detail
 {
-    class StopInfo
+    public enum Hedge
     {
-        public bool inUse = false;
-        public int instrument;
-        public double stopPrice;
-        public int stopVolume;
-        public int leanInstrument;
-
-        public int parent1OrderId;
-        public int parent2OrderId;
-
-        public int volume;
-    }
-
-    public enum HedgeKind
-    {
-        OUTRIGHT = 0,
-        BASE_SPREAD = 1,
-        BV = 2
+        NONE = 0,
+        LIMITPLUS = 1,
+        MARKET = 2
     }
 }
 
 
 namespace StrategyRunner
 {
-
     public class Hedging
     {
         Strategy mStrategy;
 
-        KGOrder leanBuy;
-        KGOrder leanSell;
-
-        KGOrder quotedBuy;
-        KGOrder quotedFarBuy;
-        KGOrder quotedSell;
-        KGOrder quotedFarSell;
-
-        KGOrder leanBuyMarket;
-        KGOrder leanSellMarket;
-        KGOrder quotedBuyMarket;
-        KGOrder quotedSellMarket;
-        KGOrder quotedFarBuyMarket;
-        KGOrder quotedFarSellMarket;
-
-        Detail.StopInfo stopBuyOrder1Info;
-        Detail.StopInfo stopSellOrder1Info;
-        Detail.StopInfo stopBuyOrder2Info;
-        Detail.StopInfo stopSellOrder2Info;
-
-        List<int> mHedgeIndices;
-
-        public int pendingOutrightHedges;
-        Dictionary<int, int> pendingOutrightHedgeOrders;
+        Dictionary<int, KGOrder> buyOrders;
+        Dictionary<int, KGOrder> sellOrders;
 
         Orders mOrders;
 
-        Dictionary<int /*cancelledOrderId*/, int /*volume*/> mPendingResubmissions;
+        List<int> mIOCs;
+        List<int> mIOCCancels;
 
         public Hedging(Strategy strategy)
         {
             mStrategy = strategy;
-            mHedgeIndices = new List<int>
+
+            buyOrders = new Dictionary<int, KGOrder>();
+            sellOrders = new Dictionary<int, KGOrder>();
+
+            foreach (var index in strategy.correlatedIndices)
             {
-                mStrategy.quoteIndex,
-                mStrategy.quoteFarIndex,
-                mStrategy.leanIndex
-            };
+                KGOrder buyOrder = new KGOrder();
+                buyOrders[index] = buyOrder;
+                KGOrder sellOrder = new KGOrder();
+                sellOrders[index] = sellOrder;
+                mStrategy.strategyOrders.Add(buyOrder);
+                mStrategy.strategyOrders.Add(sellOrder);
+            }
 
-            leanBuy = new KGOrder();
-            leanSell = new KGOrder();
-            leanBuyMarket = new KGOrder();
-            leanSellMarket = new KGOrder();
+            foreach (var index in strategy.crossVenueIndices)
+            {
+                KGOrder buyOrder = new KGOrder();
+                buyOrders[index] = buyOrder;
+                KGOrder sellOrder = new KGOrder();
+                sellOrders[index] = sellOrder;
+                mStrategy.strategyOrders.Add(buyOrder);
+                mStrategy.strategyOrders.Add(sellOrder);
+            }
 
-            quotedBuy = new KGOrder();
-            quotedFarBuy = new KGOrder();
-            quotedFarBuyMarket = new KGOrder();
-            quotedBuyMarket = new KGOrder();
-
-            quotedSell = new KGOrder();
-            quotedFarSell = new KGOrder();
-            quotedSellMarket = new KGOrder();
-            quotedFarSellMarket = new KGOrder();
-
-            mStrategy.strategyOrders.Add(leanBuy);
-            mStrategy.strategyOrders.Add(leanSell);
-            mStrategy.strategyOrders.Add(leanBuyMarket);
-            mStrategy.strategyOrders.Add(leanSellMarket);
-
-            mStrategy.strategyOrders.Add(quotedBuy);
-            mStrategy.strategyOrders.Add(quotedFarBuy);
-            mStrategy.strategyOrders.Add(quotedBuyMarket);
-            mStrategy.strategyOrders.Add(quotedFarBuyMarket);
-
-            mStrategy.strategyOrders.Add(quotedSell);
-            mStrategy.strategyOrders.Add(quotedFarSell);
-            mStrategy.strategyOrders.Add(quotedSellMarket);
-            mStrategy.strategyOrders.Add(quotedFarSellMarket);
-
-            stopBuyOrder1Info = new StopInfo();
-            stopSellOrder1Info = new StopInfo();
-            stopBuyOrder2Info = new StopInfo();
-            stopSellOrder2Info = new StopInfo();
-
-            pendingOutrightHedgeOrders = new Dictionary<int, int>();
-
-            mPendingResubmissions = new Dictionary<int, int>();
+            mIOCs = new List<int>();
+            mIOCCancels = new List<int>();
 
             mOrders = mStrategy.orders;
         }
@@ -122,13 +69,14 @@ namespace StrategyRunner
             mStrategy.API.SendToRemote(message, KGConstants.EVENT_GENERAL_INFO);
         }
 
-        private void CancelStrategy(string reason)
+        double GetLimitPlusBuyPrice(int index)
         {
-            mStrategy.API.SetStrategyStatus(mStrategy.stgID, 0);
-            mStrategy.API.CancelAllOrders(mStrategy.stgID);
-            mStrategy.API.SendAlertBeep();
-            mStrategy.API.Log(String.Format("CANCEL STG {0}: {1}", mStrategy.stgID, reason));
-            mStrategy.API.SendToRemote(String.Format("CANCEL STG {0}: {1}", mStrategy.stgID, reason), KGConstants.EVENT_ERROR);
+            return mStrategy.asks[index].price - mStrategy.API.GetTickSize(index);
+        }
+
+        double GetLimitPlusSellPrice(int index)
+        {
+            return mStrategy.bids[index].price + mStrategy.API.GetTickSize(index);
         }
 
         private int GetHedgeInstrument(int quantity)
@@ -136,58 +84,60 @@ namespace StrategyRunner
             int hedgeIndex = -1;
             double bestOffer = double.MaxValue;
             double bestBid = double.MinValue;
+            int hedgerQty = 0;
 
-            foreach (var index in mHedgeIndices)
+            if (quantity > 0)
             {
-                if (Math.Abs(mStrategy.holding[index] + quantity) > P.maxOutrights)
-                    continue;
-
-                if (quantity > 0)
+                foreach (var index in mStrategy.crossVenueIndices)
                 {
-                    if (mStrategy.asks[index].price < bestOffer)
+                    if (mStrategy.holding[index] + quantity < P.maxOutrights)
                     {
-                        bestOffer = mStrategy.asks[index].price;
-                        hedgeIndex = index;
-                    }
-                    else if (index == mStrategy.leanIndex && mStrategy.asks[index].price + mStrategy.boxTargetPrice < bestOffer)
-                    {
-                        bestOffer = mStrategy.asks[index].price + mStrategy.boxTargetPrice;
-                        hedgeIndex = index;
-                    }
-                    else if (mStrategy.asks[index].price == bestOffer)
-                    {
-                        if (hedgeIndex == mStrategy.leanIndex)
+                        if ((mStrategy.asks[index].price < bestOffer) || ((mStrategy.asks[index].price == bestOffer) && (mStrategy.asks[index].qty > hedgerQty)))
                         {
+                            bestOffer = mStrategy.asks[index].price;
                             hedgeIndex = index;
-                        }
-                        else if (hedgeIndex == mStrategy.quoteFarIndex && index == mStrategy.quoteIndex)
-                        {
-                            hedgeIndex = index;
+                            hedgerQty = mStrategy.asks[index].qty;
                         }
                     }
                 }
 
-                if (quantity < 0)
+                foreach (var index in mStrategy.correlatedIndices)
                 {
-                    if (mStrategy.bids[index].price > bestBid)
+                    if (mStrategy.holding[index] + quantity < P.maxOutrights)
                     {
-                        bestBid = mStrategy.bids[index].price;
-                        hedgeIndex = index;
-                    }
-                    else if (index == mStrategy.leanIndex && mStrategy.bids[index].price + mStrategy.boxTargetPrice > bestBid)
-                    {
-                        bestBid = mStrategy.bids[index].price + mStrategy.boxTargetPrice;
-                        hedgeIndex = index;
-                    }
-                    else if (mStrategy.bids[index].price == bestBid)
-                    {
-                        if (hedgeIndex == mStrategy.leanIndex)
+                        if ((mStrategy.asks[index].price + mStrategy.correlatedSpreadTargetPrice < bestOffer) || ((mStrategy.asks[index].price + mStrategy.correlatedSpreadTargetPrice == bestOffer) && (mStrategy.asks[index].qty > hedgerQty)))
                         {
+                            bestOffer = mStrategy.asks[index].price + mStrategy.correlatedSpreadTargetPrice;
                             hedgeIndex = index;
+                            hedgerQty = mStrategy.asks[index].qty;
                         }
-                        else if (hedgeIndex == mStrategy.quoteFarIndex && index == mStrategy.quoteIndex)
+                    }
+                }
+            }
+            else if (quantity < 0)
+            {
+                foreach (var index in mStrategy.crossVenueIndices)
+                {
+                    if (mStrategy.holding[index] + quantity > -P.maxOutrights)
+                    {
+                        if ((mStrategy.bids[index].price > bestBid) || ((mStrategy.bids[index].price == bestBid) && (mStrategy.bids[index].qty > hedgerQty)))
                         {
+                            bestBid = mStrategy.bids[index].price;
                             hedgeIndex = index;
+                            hedgerQty = mStrategy.bids[index].qty;
+                        }
+                    }
+                }
+
+                foreach (var index in mStrategy.correlatedIndices)
+                {
+                    if (mStrategy.holding[index] + quantity > -P.maxOutrights)
+                    {
+                        if ((mStrategy.bids[index].price + mStrategy.correlatedSpreadTargetPrice > bestBid) || ((mStrategy.bids[index].price + mStrategy.correlatedSpreadTargetPrice == bestBid) && (mStrategy.bids[index].qty > hedgerQty)))
+                        {
+                            bestBid = mStrategy.bids[index].price + mStrategy.correlatedSpreadTargetPrice;
+                            hedgeIndex = index;
+                            hedgerQty = mStrategy.bids[index].qty;
                         }
                     }
                 }
@@ -196,629 +146,246 @@ namespace StrategyRunner
             return hedgeIndex;
         }
 
-        private void ManagePendingOrders(int orderId, int amount)
+        public void CheckIOC()
         {
-            pendingOutrightHedgeOrders[orderId] = amount;
-            pendingOutrightHedges += amount;
-        }
-
-        public void ManagePendingOrders(KGDeal deal)
-        {
-            if (pendingOutrightHedgeOrders.ContainsKey(deal.internalOrderNumber))
+            foreach (var ord in mStrategy.strategyOrders)
             {
-                if (deal.isBuy)
+                if (!mOrders.orderInTransientState(ord) && ord.bidSize < 0 && ord.askSize < 0)
                 {
-                    pendingOutrightHedgeOrders[deal.internalOrderNumber] -= deal.amount;
-                }
-                else
-                {
-                    pendingOutrightHedgeOrders[deal.internalOrderNumber] += deal.amount;
-                }
-
-                if (pendingOutrightHedgeOrders[deal.internalOrderNumber] == 0)
-                {
-                    pendingOutrightHedgeOrders.Remove(deal.internalOrderNumber);
-                }
-
-                pendingOutrightHedges = 0;
-                foreach (var perOrder in pendingOutrightHedgeOrders)
-                {
-                    pendingOutrightHedges += perOrder.Value;
-                }
-            }
-        }
-
-        private void PostStopOrder(int instrument, int leanInstrument, double limitPrice, double stopPrice, int volume, int stopVolume, Detail.Side side, int parentOrderId)
-        {
-            Log(String.Format("posting stop order for ins={0} lmt_price={1} stp_price={2} vol={3} stp_vol={4}", instrument, limitPrice, stopPrice, volume, stopVolume));
-            if (side == Detail.Side.BUY)
-            {
-                if (stopBuyOrder1Info.inUse && stopBuyOrder2Info.inUse && stopBuyOrder1Info.instrument != instrument && stopBuyOrder2Info.instrument != instrument)
-                {
-                    CancelStrategy("max simultaneous stop orders reached");
-                    return;
-                }
-                else if (stopBuyOrder1Info.inUse && stopBuyOrder2Info.inUse && stopBuyOrder1Info.instrument == instrument)
-                {
-                    stopBuyOrder1Info.volume += volume;
-                    stopBuyOrder1Info.parent2OrderId = parentOrderId;
-                    Log(String.Format("incrementing stopBuyOrder1 volume to {0}", stopBuyOrder1Info.volume));
-                }
-                else if (stopBuyOrder1Info.inUse && stopBuyOrder1Info.instrument == instrument)
-                {
-                    stopBuyOrder1Info.volume += volume;
-                    stopBuyOrder1Info.parent2OrderId = parentOrderId;
-                    Log(String.Format("incrementing stopBuyOrder1 volume to {0}", stopBuyOrder1Info.volume));
-                }
-                else if (stopBuyOrder1Info.inUse && stopBuyOrder2Info.inUse && stopBuyOrder2Info.instrument == instrument)
-                {
-                    stopBuyOrder2Info.volume += volume;
-                    stopBuyOrder2Info.parent2OrderId = parentOrderId;
-                    Log(String.Format("incrementing stopBuyOrder2 volume to {0}", stopBuyOrder2Info.volume));
-                }
-                else if (stopBuyOrder2Info.inUse && stopBuyOrder2Info.instrument == instrument)
-                {
-                    stopBuyOrder2Info.volume += volume;
-                    stopBuyOrder2Info.parent2OrderId = parentOrderId;
-                    Log(String.Format("incrementing stopBuyOrder2 volume to {0}", stopBuyOrder2Info.volume));
-                }
-                else if (stopBuyOrder1Info.inUse)
-                {
-                    Log("populating stopBuyOrder2");
-                    stopBuyOrder2Info.inUse = true;
-                    stopBuyOrder2Info.instrument = instrument;
-                    stopBuyOrder2Info.stopPrice = stopPrice;
-                    stopBuyOrder2Info.stopVolume = stopVolume;
-                    stopBuyOrder2Info.leanInstrument = leanInstrument;
-                    stopBuyOrder2Info.parent1OrderId = parentOrderId;
-                    stopBuyOrder2Info.parent2OrderId = -1;
-                    stopBuyOrder2Info.volume = volume;
-                }
-                else
-                {
-                    Log("populating stopBuyOrder1");
-                    stopBuyOrder1Info.inUse = true;
-                    stopBuyOrder1Info.instrument = instrument;
-                    stopBuyOrder1Info.stopPrice = stopPrice;
-                    stopBuyOrder1Info.stopVolume = stopVolume;
-                    stopBuyOrder1Info.leanInstrument = leanInstrument;
-                    stopBuyOrder1Info.parent1OrderId = parentOrderId;
-                    stopBuyOrder1Info.parent2OrderId = -1;
-                    stopBuyOrder1Info.volume = volume;
-                }
-            }
-            else
-            {
-                if (stopSellOrder1Info.inUse && stopSellOrder2Info.inUse && stopSellOrder1Info.instrument != instrument && stopSellOrder2Info.instrument != instrument)
-                {
-                    CancelStrategy("max simultaneous stop orders reached");
-                    return;
-                }
-                else if (stopSellOrder1Info.inUse && stopSellOrder2Info.inUse && stopSellOrder1Info.instrument == instrument)
-                {
-                    stopSellOrder1Info.volume += volume;
-                    stopSellOrder1Info.parent2OrderId = parentOrderId;
-                    Log(String.Format("incrementing stopSellOrder1 volume to {0}", stopSellOrder1Info.volume));
-                }
-                else if (stopSellOrder1Info.inUse && stopSellOrder1Info.instrument == instrument)
-                {
-                    stopSellOrder1Info.volume += volume;
-                    stopSellOrder1Info.parent2OrderId = parentOrderId;
-                    Log(String.Format("incrementing stopSellOrder1 volume to {0}", stopSellOrder1Info.volume));
-                }
-                else if (stopSellOrder1Info.inUse && stopSellOrder2Info.inUse && stopSellOrder2Info.instrument == instrument)
-                {
-                    stopSellOrder2Info.volume += volume;
-                    stopSellOrder2Info.parent2OrderId = parentOrderId;
-                    Log(String.Format("incrementing stopSellOrder2 volume to {0}", stopSellOrder2Info.volume));
-                }
-                else if (stopSellOrder2Info.inUse && stopSellOrder2Info.instrument == instrument)
-                {
-                    stopSellOrder2Info.volume += volume;
-                    stopSellOrder2Info.parent2OrderId = parentOrderId;
-                    Log(String.Format("incrementing stopSellOrder2 volume to {0}", stopSellOrder2Info.volume));
-                }
-                else if (stopSellOrder1Info.inUse)
-                {
-                    Log("populating stopSellOrder2");
-                    stopSellOrder2Info.inUse = true;
-                    stopSellOrder2Info.instrument = instrument;
-                    stopSellOrder2Info.stopPrice = stopPrice;
-                    stopSellOrder2Info.stopVolume = stopVolume;
-                    stopSellOrder2Info.leanInstrument = leanInstrument;
-                    stopSellOrder2Info.parent1OrderId = parentOrderId;
-                    stopSellOrder2Info.parent2OrderId = -1;
-                    stopSellOrder2Info.volume = volume;
-                }
-                else
-                {
-                    Log("populating stopSellOrder1");
-                    stopSellOrder1Info.inUse = true;
-                    stopSellOrder1Info.instrument = instrument;
-                    stopSellOrder1Info.stopPrice = stopPrice;
-                    stopSellOrder1Info.stopVolume = stopVolume;
-                    stopSellOrder1Info.leanInstrument = leanInstrument;
-                    stopSellOrder1Info.parent1OrderId = parentOrderId;
-                    stopSellOrder1Info.parent2OrderId = -1;
-                    stopSellOrder1Info.volume = volume;
-                }
-            }
-
-            mStrategy.activeStopOrders = true;
-        }
-
-        private bool shouldStopBuy(StopInfo info)
-        {
-            int index = info.leanInstrument != -1 ? info.leanInstrument : info.instrument;
-            bool volumeAtStopPriceLow = (mStrategy.asks[index].price == info.stopPrice && mStrategy.asks[index].qty < info.stopVolume);
-            bool marketRanAway = mStrategy.asks[index].price > info.stopPrice;
-            bool theoRanAway = mStrategy.API.GetImprovedCM(index) > info.stopPrice + 0.001;
-            return
-                (volumeAtStopPriceLow || marketRanAway)
-                && theoRanAway;
-        }
-
-        private bool shouldStopSell(StopInfo info)
-        {
-            int index = info.leanInstrument != -1 ? info.leanInstrument : info.instrument;
-            bool volumeAtStopPriceLow = (mStrategy.bids[index].price == info.stopPrice && mStrategy.bids[index].qty < info.stopVolume);
-            bool marketRanAway = mStrategy.bids[index].price < info.stopPrice;
-            bool theoRanAway = mStrategy.API.GetImprovedCM(index) < info.stopPrice - 0.001;
-            return
-                (volumeAtStopPriceLow || marketRanAway)
-                && theoRanAway;
-        }
-
-        private void ReassignPending(int parentOrderId, int stopOrderId)
-        {
-            if (pendingOutrightHedgeOrders.ContainsKey(parentOrderId))
-            {
-                pendingOutrightHedgeOrders.Remove(parentOrderId);
-            }
-        }
-
-        public void EvaluateStops()
-        {
-            if (stopBuyOrder1Info.inUse)
-            {
-                if (shouldStopBuy(stopBuyOrder1Info))
-                {
-                    Log("executing stopBuyOrder1");
-                    int orderId = HedgeNow(stopBuyOrder1Info.volume);
-                    stopBuyOrder1Info.inUse = false;
-
-                    if (stopBuyOrder1Info.parent1OrderId != -1)
+                    if (mIOCs.Contains(ord.internalOrderNumber))
                     {
-                        ReassignPending(stopBuyOrder1Info.parent1OrderId, orderId);
-                        mOrders.CancelOrder(stopBuyOrder1Info.parent1OrderId);
+                        mIOCs.Remove(ord.internalOrderNumber);
+                        Hedge();
                     }
-
-
-                    if (stopBuyOrder1Info.parent2OrderId != -1)
+                }
+                else if (!mOrders.orderInTransientState(ord) && ord.orderStatus != 4)
+                {
+                    if (mIOCs.Contains(ord.internalOrderNumber))
                     {
-                        ReassignPending(stopBuyOrder1Info.parent2OrderId, orderId);
-                        mOrders.CancelOrder(stopBuyOrder1Info.parent2OrderId);
+                        mIOCs.Remove(ord.internalOrderNumber);
+                        mIOCCancels.Add(ord.internalOrderNumber);
+                        mOrders.CancelOnNextMD(ord);
+                        Hedge();
                     }
                 }
             }
-
-            if (stopBuyOrder2Info.inUse)
-            {
-                if (shouldStopBuy(stopBuyOrder2Info))
-                {
-                    Log("executing stopBuyOrder2");
-                    int orderId = HedgeNow(stopBuyOrder2Info.volume);
-                    stopBuyOrder2Info.inUse = false;
-
-                    if (stopBuyOrder2Info.parent1OrderId != -1)
-                    {
-                        ReassignPending(stopBuyOrder2Info.parent1OrderId, orderId);
-                        mOrders.CancelOrder(stopBuyOrder2Info.parent1OrderId);
-                    }
-
-                    if (stopBuyOrder2Info.parent2OrderId != -1)
-                    {
-                        ReassignPending(stopBuyOrder2Info.parent2OrderId, orderId);
-                        mOrders.CancelOrder(stopBuyOrder2Info.parent2OrderId);
-                    }
-                }
-            }
-
-            if (stopSellOrder1Info.inUse)
-            {
-                if (shouldStopSell(stopSellOrder1Info))
-                {
-                    Log("executing stopSellOrder1");
-                    int orderId = HedgeNow(-stopSellOrder1Info.volume);
-                    stopSellOrder1Info.inUse = false;
-
-                    if (stopSellOrder1Info.parent1OrderId != -1)
-                    {
-                        ReassignPending(stopSellOrder1Info.parent1OrderId, orderId);
-                        mOrders.CancelOrder(stopSellOrder1Info.parent1OrderId);
-                    }
-
-                    if (stopSellOrder1Info.parent2OrderId != -1)
-                    {
-                        ReassignPending(stopSellOrder1Info.parent2OrderId, orderId);
-                        mOrders.CancelOrder(stopSellOrder1Info.parent2OrderId);
-                    }
-                }
-            }
-
-            if (stopSellOrder2Info.inUse)
-            {
-                if (shouldStopSell(stopSellOrder2Info))
-                {
-                    Log("executing stopSellOrder2");
-                    int orderId = HedgeNow(-stopBuyOrder2Info.volume);
-                    stopSellOrder2Info.inUse = false;
-
-                    if (stopSellOrder2Info.parent1OrderId != -1)
-                    {
-                        ReassignPending(stopSellOrder2Info.parent1OrderId, orderId);
-                        mOrders.CancelOrder(stopSellOrder2Info.parent1OrderId);
-                    }
-
-                    if (stopSellOrder2Info.parent2OrderId != -1)
-                    {
-                        ReassignPending(stopSellOrder2Info.parent2OrderId, orderId);
-                        mOrders.CancelOrder(stopSellOrder2Info.parent2OrderId);
-                    }
-                }
-            }
-
-            if (!stopBuyOrder1Info.inUse && !stopBuyOrder2Info.inUse && !stopSellOrder1Info.inUse && !stopSellOrder2Info.inUse)
-            {
-                Log("all stop orders executed");
-                mStrategy.activeStopOrders = false;
-            }
         }
 
-        public void PropagateToStopOrder(int parentOrderId)
+        private bool pricesAreEqual(double price1, double price2)
         {
-            if (parentOrderId == stopBuyOrder1Info.parent1OrderId)
-            {
-                stopBuyOrder1Info.parent1OrderId = -1;
-
-                if (stopBuyOrder1Info.parent1OrderId == -1 && stopBuyOrder1Info.parent2OrderId == -1)
-                {
-                    stopBuyOrder1Info.inUse = false;
-                }
-            }
-
-            if (parentOrderId == stopBuyOrder2Info.parent1OrderId)
-            {
-                stopBuyOrder2Info.parent1OrderId = -1;
-
-                if (stopBuyOrder2Info.parent1OrderId == -1 && stopBuyOrder2Info.parent2OrderId == -1)
-                {
-                    stopBuyOrder2Info.inUse = false;
-                }
-            }
-
-            if (parentOrderId == stopSellOrder1Info.parent1OrderId)
-            {
-                stopSellOrder1Info.parent1OrderId = -1;
-
-                if (stopSellOrder1Info.parent1OrderId == -1 && stopSellOrder1Info.parent2OrderId == -1)
-                {
-                    stopSellOrder1Info.inUse = false;
-                }
-            }
-
-            if (parentOrderId == stopSellOrder2Info.parent1OrderId)
-            {
-                stopSellOrder2Info.parent1OrderId = -1;
-
-                if (stopSellOrder2Info.parent1OrderId == -1 && stopSellOrder2Info.parent2OrderId == -1)
-                {
-                    stopSellOrder2Info.inUse = false;
-                }
-            }
-
-            if (parentOrderId == stopBuyOrder1Info.parent2OrderId)
-            {
-                stopBuyOrder1Info.parent2OrderId = -1;
-
-                if (stopBuyOrder1Info.parent1OrderId == -1 && stopBuyOrder1Info.parent2OrderId == -1)
-                {
-                    stopBuyOrder1Info.inUse = false;
-                }
-            }
-
-            if (parentOrderId == stopBuyOrder2Info.parent2OrderId)
-            {
-                stopBuyOrder2Info.parent2OrderId = -1;
-
-                if (stopBuyOrder2Info.parent1OrderId == -1 && stopBuyOrder2Info.parent2OrderId == -1)
-                {
-                    stopBuyOrder2Info.inUse = false;
-                }
-            }
-
-            if (parentOrderId == stopSellOrder1Info.parent2OrderId)
-            {
-                stopSellOrder1Info.parent2OrderId = -1;
-
-                if (stopSellOrder1Info.parent1OrderId == -1 && stopSellOrder1Info.parent2OrderId == -1)
-                {
-                    stopSellOrder1Info.inUse = false;
-                }
-            }
-
-            if (parentOrderId == stopSellOrder2Info.parent2OrderId)
-            {
-                stopSellOrder2Info.parent2OrderId = -1;
-
-                if (stopSellOrder2Info.parent1OrderId == -1 && stopSellOrder2Info.parent2OrderId == -1)
-                {
-                    stopSellOrder2Info.inUse = false;
-                }
-            }
-
-            if (mStrategy.activeStopOrders && !stopBuyOrder1Info.inUse && !stopBuyOrder2Info.inUse && !stopSellOrder1Info.inUse && !stopSellOrder2Info.inUse)
-            {
-                mStrategy.activeStopOrders = false;
-            }
+            return Math.Abs(price1 - price2) < 1e-5;
         }
 
-        public void OnOrder(KGOrder ord)
+        private void LimitPlusBuy(int n, int index)
         {
-            if (mPendingResubmissions.ContainsKey(ord.internalOrderNumber))
-            {
-                int size = mPendingResubmissions[ord.internalOrderNumber];
-                mPendingResubmissions.Remove(ord.internalOrderNumber);
+            var order = buyOrders[index];
 
-                Hedge(size, Source.NEAR);
-            }
-        }
+            double price = GetLimitPlusBuyPrice(index);
 
-        private void LimitPlusBuyLean(int n)
-        {
-            var order = leanBuy;
-
-            int orderId = mOrders.SendOrder(order, mStrategy.leanIndex, Side.BUY, mStrategy.bids[mStrategy.leanIndex].price, n, "HEDGE");
-            
-            if (orderId == -1)
-            {
-                mPendingResubmissions[order.internalOrderNumber] = n;
-                mOrders.CancelOrder(order.internalOrderNumber);
-                return;
-            }
-
-            ManagePendingOrders(order.internalOrderNumber, n);
-            PostStopOrder(mStrategy.leanIndex, mStrategy.leanIndex, mStrategy.bids[mStrategy.leanIndex].price, mStrategy.asks[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.BUY, order.internalOrderNumber);
-        }
-
-        private void LimitPlusSellLean(int n)
-        {
-            var order = leanSell;
-
-            int orderId = mOrders.SendOrder(order, mStrategy.leanIndex, Side.SELL, mStrategy.asks[mStrategy.leanIndex].price, n, "HEDGE");
+            int orderId = mOrders.SendOrder(order, index, Side.BUY, price, n, "HEDGE", true);
 
             if (orderId == -1)
             {
-                mPendingResubmissions[order.internalOrderNumber] = n;
                 mOrders.CancelOrder(order.internalOrderNumber);
                 return;
             }
-
-            ManagePendingOrders(order.internalOrderNumber, -n);
-            PostStopOrder(mStrategy.leanIndex, mStrategy.leanIndex, mStrategy.asks[mStrategy.leanIndex].price, mStrategy.bids[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.SELL, order.internalOrderNumber);
         }
-
-        private void LimitPlusBuyQuoted(int n)
+        private void LimitPlusSell(int n, int index)
         {
-            var order = quotedBuy;
+            var order = sellOrders[index];
 
-            int orderId = mOrders.SendOrder(order, mStrategy.quoteIndex, Side.BUY, mStrategy.bids[mStrategy.quoteIndex].price, n, "HEDGE");
+            double price = GetLimitPlusSellPrice(index);
+
+            int orderId = mOrders.SendOrder(order, index, Side.SELL, price, n, "HEDGE", true);
 
             if (orderId == -1)
             {
-                mPendingResubmissions[order.internalOrderNumber] = n;
                 mOrders.CancelOrder(order.internalOrderNumber);
                 return;
             }
-
-            ManagePendingOrders(order.internalOrderNumber, n);
-            PostStopOrder(mStrategy.quoteIndex, mStrategy.leanIndex, mStrategy.bids[mStrategy.quoteIndex].price, mStrategy.asks[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.BUY, order.internalOrderNumber);
         }
 
-        private void LimitPlusBuyQuotedFar(int n)
+        private int Buy(int n, int index)
         {
-            var order = quotedFarBuy;
+            var order = buyOrders[index];
+            int orderId = mOrders.SendOrder(order, index, Side.BUY, mStrategy.asks[index].price, n, "HEDGE", true);
+            return orderId;
+        }
 
-            int orderId = mOrders.SendOrder(order, mStrategy.quoteFarIndex, Side.BUY, mStrategy.bids[mStrategy.quoteFarIndex].price, n, "HEDGE");
+        private int Sell(int n, int index)
+        {
+            var order = sellOrders[index];
+            int orderId = mOrders.SendOrder(order, index, Side.SELL, mStrategy.bids[index].price, n, "HEDGE", true);
+            return orderId;
+        }
 
-            if (orderId == -1)
+        public void CancelAllHedgeOrders(int except = -1)
+        {
+            foreach (var perInstrument in buyOrders)
             {
-                mPendingResubmissions[order.internalOrderNumber] = n;
-                mOrders.CancelOrder(order.internalOrderNumber);
-                return;
+                var order = perInstrument.Value;
+                if (mOrders.orderInUse(order))
+                {
+                    if (perInstrument.Key != except)
+                        mOrders.CancelOrder(order);
+                }
             }
 
-            ManagePendingOrders(order.internalOrderNumber, n);
-            PostStopOrder(mStrategy.quoteFarIndex, mStrategy.leanIndex, mStrategy.bids[mStrategy.quoteFarIndex].price, mStrategy.asks[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.BUY, order.internalOrderNumber);
-        }
-
-        private void LimitPlusSellQuoted(int n)
-        {
-            var order = quotedSell;
-
-            int orderId = mOrders.SendOrder(order, mStrategy.quoteIndex, Side.SELL, mStrategy.asks[mStrategy.quoteIndex].price, n, "HEDGE");
-
-            if (orderId == -1)
+            foreach (var perInstrument in sellOrders)
             {
-                mPendingResubmissions[order.internalOrderNumber] = n;
-                mOrders.CancelOrder(order.internalOrderNumber);
-                return;
+                var order = perInstrument.Value;
+                if (mOrders.orderInUse(order))
+                {
+                    if (perInstrument.Key != except)
+                        mOrders.CancelOrder(order);
+                }
             }
-
-            ManagePendingOrders(order.internalOrderNumber, -n);
-            PostStopOrder(mStrategy.quoteIndex, mStrategy.leanIndex, mStrategy.asks[mStrategy.quoteIndex].price, mStrategy.bids[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.SELL, order.internalOrderNumber);
         }
 
-        private void LimitPlusSellQuotedFar(int n)
+        public bool TakeLimitPlus(int netPosition)
         {
-            var order = quotedFarSell;
+            int hedgeInstrument = GetHedgeInstrument(-netPosition);
 
-            if (mOrders.orderInUse(order))
+            int limitPlusSize = mStrategy.limitPlusSize;
+            if (hedgeInstrument != mStrategy.leanIndex)
+                limitPlusSize = mStrategy.nonLeanLimitPlusSize;
+
+            if (netPosition > 0)
             {
-                mPendingResubmissions[order.internalOrderNumber] = n;
-                mOrders.CancelOrder(order.internalOrderNumber);
+                if (mStrategy.bids[hedgeInstrument].qty < limitPlusSize
+                    && mStrategy.bids[hedgeInstrument].price >= mStrategy.API.GetImprovedCM(hedgeInstrument) - mStrategy.GetMaxLossMarketHedge())
+                {
+                    CancelAllHedgeOrders(hedgeInstrument);
+                    bool success = HedgeNow(-netPosition, hedgeInstrument);
+                    return success;
+                }
+            }
+            else if (netPosition < 0)
+            {
+                if (mStrategy.asks[hedgeInstrument].qty < limitPlusSize
+                    && mStrategy.asks[hedgeInstrument].price <= mStrategy.API.GetImprovedCM(hedgeInstrument) + mStrategy.GetMaxLossMarketHedge())
+                {
+                    CancelAllHedgeOrders(hedgeInstrument);
+                    bool success = HedgeNow(-netPosition, hedgeInstrument);
+                    return success;
+                }
+            }
+
+            return false;
+        }
+
+        public void Hedge()
+        {
+            int netPosition = mStrategy.GetNetPosition();
+
+            if (netPosition == 0)
+            {
+                CancelAllHedgeOrders();
                 return;
             }
 
-            int orderId = mOrders.SendOrder(order, mStrategy.quoteFarIndex, Side.SELL, mStrategy.asks[mStrategy.quoteFarIndex].price, n, "HEDGE");
-            ManagePendingOrders(order.internalOrderNumber, -n);
-            PostStopOrder(mStrategy.quoteFarIndex, mStrategy.leanIndex, mStrategy.asks[mStrategy.quoteFarIndex].price, mStrategy.bids[mStrategy.leanIndex].price, n, mStrategy.limitPlusSize, Side.SELL, order.internalOrderNumber);
+            if (TakeLimitPlus(netPosition))
+                return;
+
+            if (netPosition > 0)
+            {
+                foreach (var perInstrument in sellOrders)
+                {
+                    var index = perInstrument.Key;
+                    var order = perInstrument.Value;
+
+                    if (mOrders.orderInTransientState(order))
+                        return;
+
+                    if (order.bidSize > 0 && order.askSize > 0)
+                    {
+                        throw new Exception(String.Format("STG {0}: hedging order {1} has both bid and ask size", mStrategy.stgID, order));
+                    }
+
+                    var price = GetLimitPlusSellPrice(index);
+
+                    double theoThreshold = mStrategy.API.GetImprovedCM(index) - mStrategy.GetMaxLossLimitHedge();
+
+                    if (mOrders.orderInUse(order) && order.ask <= theoThreshold - (mStrategy.GetMaxLossLimitHedge() / 2.0))
+                    {
+                        mOrders.CancelOrder(order);
+                        continue;
+                    }
+
+                    if (order.askSize == netPosition && pricesAreEqual(order.ask, price))
+                        continue;
+
+                    if (price <= theoThreshold)
+                        continue;
+
+                    LimitPlusSell(netPosition, index);
+                }
+            }
+            else if (netPosition < 0)
+            {
+                foreach (var perInstrument in buyOrders)
+                {
+                    var index = perInstrument.Key;
+                    var order = perInstrument.Value;
+
+                    if (mOrders.orderInTransientState(order))
+                        return;
+
+                    if (order.bidSize > 0 && order.askSize > 0)
+                    {
+                        throw new Exception(String.Format("STG {0}: hedging order {1} has both bid and ask size", mStrategy.stgID, order));
+                    }
+
+                    var price = GetLimitPlusBuyPrice(index);
+
+                    double theoThreshold = mStrategy.API.GetImprovedCM(index) + mStrategy.GetMaxLossLimitHedge();
+
+                    if (mOrders.orderInUse(order) && order.bid >= theoThreshold + (mStrategy.GetMaxLossLimitHedge() / 2.0))
+                    {
+                        mOrders.CancelOrder(order);
+                        continue;
+                    }
+
+                    if (order.bidSize == -netPosition && pricesAreEqual(order.bid, price))
+                        continue;
+
+                    if (price >= theoThreshold)
+                        continue;
+
+                    LimitPlusBuy(-netPosition, index);
+                }
+            }
         }
 
-        private int BuyLean(int n)
-        {
-            int orderId = mOrders.SendOrder(leanBuyMarket, mStrategy.leanIndex, Side.BUY, mStrategy.asks[mStrategy.leanIndex].price, n, "HEDGE");
-            ManagePendingOrders(orderId, n);
-            return orderId;
-        }
-
-        private int SellLean(int n)
-        {
-            int orderId = mOrders.SendOrder(leanSellMarket, mStrategy.leanIndex, Side.SELL, mStrategy.bids[mStrategy.leanIndex].price, n, "HEDGE");
-            ManagePendingOrders(orderId, -n);
-            return orderId;
-        }
-
-        private int SellQuoted(int n)
-        {
-            int orderId = mOrders.SendOrder(quotedSellMarket, mStrategy.quoteIndex, Side.SELL, mStrategy.bids[mStrategy.quoteIndex].price, n, "HEDGE");
-            ManagePendingOrders(orderId, -n);
-            return orderId;
-        }
-
-        private int BuyQuoted(int n)
-        {
-            int orderId = mOrders.SendOrder(quotedBuyMarket, mStrategy.quoteIndex, Side.BUY, mStrategy.asks[mStrategy.quoteIndex].price, n, "HEDGE");
-            ManagePendingOrders(orderId, n);
-            return orderId;
-        }
-
-        private int SellQuotedFar(int n)
-        {
-            int orderId = mOrders.SendOrder(quotedFarSellMarket, mStrategy.quoteFarIndex, Side.SELL, mStrategy.bids[mStrategy.quoteFarIndex].price, n, "HEDGE");
-            ManagePendingOrders(orderId, -n);
-            return orderId;
-        }
-
-        private int BuyQuotedFar(int n)
-        {
-            int orderId = mOrders.SendOrder(quotedFarBuyMarket, mStrategy.quoteFarIndex, Side.BUY, mStrategy.asks[mStrategy.quoteFarIndex].price, n, "HEDGE");
-            ManagePendingOrders(orderId, n);
-            return orderId;
-        }
-
-        public void Hedge(int quantity, Source source)
+        public bool HedgeNow(int quantity, int hedgeInstrument)
         {
             if (quantity == 0)
             {
-                return;
+                return true;
             }
 
-            int hedgeInstrument = GetHedgeInstrument(quantity);
-
-            if (hedgeInstrument == mStrategy.quoteIndex)
+            if (quantity < 0)
             {
-                if (quantity < 0)
+                int orderId = Sell(-quantity, hedgeInstrument);
+                if (orderId == -1)
                 {
-                    LimitPlusSellQuoted(-quantity);
+                    return true;
                 }
-                else if (quantity > 0)
-                {
-                    LimitPlusBuyQuoted(quantity);
-                }
-                return;
+                mIOCs.Add(orderId);
+                return true;
             }
-
-            if (hedgeInstrument == mStrategy.quoteFarIndex)
+            else if (quantity > 0)
             {
-                if (quantity < 0)
+                int orderId = Buy(quantity, hedgeInstrument);
+                if (orderId == -1)
                 {
-                    LimitPlusSellQuotedFar(-quantity);
+                    return true;
                 }
-                else if (quantity > 0)
-                {
-                    LimitPlusBuyQuotedFar(quantity);
-                }
-                return;
+                mIOCs.Add(orderId);
+                return true;
             }
 
-            if (hedgeInstrument == mStrategy.leanIndex)
-            {
-                if (quantity < 0)
-                {
-                    LimitPlusSellLean(-quantity);
-                }
-                else if (quantity > 0)
-                {
-                    LimitPlusBuyLean(quantity);
-                }
-                return;
-            }
-        }
-
-        public int HedgeNow(int quantity)
-        {
-            if (quantity == 0)
-            {
-                return -1;
-            }
-
-            int hedgeInstrument = GetHedgeInstrument(quantity);
-
-            if (hedgeInstrument == mStrategy.quoteIndex)
-            {
-                if (quantity < 0)
-                {
-                    int orderId = SellQuoted(-quantity);
-                    return orderId;
-                }
-                else if (quantity > 0)
-                {
-                    int orderId = BuyQuoted(quantity);
-                    return orderId;
-                }
-            }
-
-            if (hedgeInstrument == mStrategy.quoteFarIndex)
-            {
-                if (quantity < 0)
-                {
-                    int orderId = SellQuotedFar(-quantity);
-                    return orderId;
-                }
-                else if (quantity > 0)
-                {
-                    int orderId = BuyQuotedFar(quantity);
-                    return orderId;
-                }
-            }
-
-            if (hedgeInstrument == mStrategy.leanIndex)
-            {
-                if (quantity < 0)
-                {
-                    int orderId = SellLean(-quantity);
-                    return orderId;
-                }
-                else if (quantity > 0)
-                {
-                    int orderId = BuyLean(quantity);
-                    return orderId;
-                }
-            }
-
-            return -1;
+            return true;
         }
     }
-
 }
