@@ -242,33 +242,76 @@ namespace StrategyRunner
             }
         }
 
-        public bool TakeLimitPlus(int netPosition)
+        public bool ShouldSellHedgeNow(int hedgeInstrument)
         {
-            int hedgeInstrument = GetHedgeInstrument(-netPosition);
-
+            double price = mStrategy.bids[hedgeInstrument].price;
             int limitPlusSize = mStrategy.limitPlusSize;
             if (hedgeInstrument != mStrategy.leanIndex)
                 limitPlusSize = mStrategy.nonLeanLimitPlusSize;
 
-            if (netPosition > 0)
+            if (mStrategy.bids[hedgeInstrument].qty < limitPlusSize
+                && mStrategy.bids[hedgeInstrument].price >= mStrategy.API.GetImprovedCM(hedgeInstrument) - mStrategy.GetMaxLossMarketHedge())
+                return true;
+
+            if (hedgeInstrument % mStrategy.API.n == mStrategy.quoteIndex % mStrategy.API.n) //SAME INSTRUMENT, POSSIBLY CROSS VENUE
             {
-                if (mStrategy.bids[hedgeInstrument].qty < limitPlusSize
-                    && mStrategy.bids[hedgeInstrument].price >= mStrategy.API.GetImprovedCM(hedgeInstrument) - mStrategy.GetMaxLossMarketHedge())
-                {
-                    CancelAllHedgeOrders(hedgeInstrument);
-                    bool success = HedgeNow(-netPosition, hedgeInstrument);
-                    return success;
-                }
+                if (price - mStrategy.API.GetImprovedCM(mStrategy.leanIndex) > mStrategy.boxTargetPrice)
+                    return true;
             }
-            else if (netPosition < 0)
+            else if (hedgeInstrument % mStrategy.API.n == mStrategy.leanIndex % mStrategy.API.n)
             {
-                if (mStrategy.asks[hedgeInstrument].qty < limitPlusSize
-                    && mStrategy.asks[hedgeInstrument].price <= mStrategy.API.GetImprovedCM(hedgeInstrument) + mStrategy.GetMaxLossMarketHedge())
-                {
-                    CancelAllHedgeOrders(hedgeInstrument);
-                    bool success = HedgeNow(-netPosition, hedgeInstrument);
-                    return success;
-                }
+                if (price - mStrategy.API.GetImprovedCM(mStrategy.leanIndex) > 0)
+                    return true;
+            }
+            else //NO OTHER OPTIONS CURRNTLY
+                return false;
+            
+            return false;
+        }
+
+        public bool ShouldBuyHedgeNow(int hedgeInstrument)
+        {
+            double price = mStrategy.asks[hedgeInstrument].price;
+            int limitPlusSize = mStrategy.limitPlusSize;
+            if (hedgeInstrument != mStrategy.leanIndex)
+                limitPlusSize = mStrategy.nonLeanLimitPlusSize;
+
+            if (mStrategy.bids[hedgeInstrument].qty < limitPlusSize
+                && mStrategy.asks[hedgeInstrument].price <= mStrategy.API.GetImprovedCM(hedgeInstrument) + mStrategy.GetMaxLossMarketHedge())
+                return true;
+
+            if (hedgeInstrument % mStrategy.API.n == mStrategy.quoteIndex % mStrategy.API.n) //SAME INSTRUMENT, POSSIBLY CROSS VENUE
+            {
+                if (price - mStrategy.API.GetImprovedCM(mStrategy.leanIndex) < mStrategy.boxTargetPrice)
+                    return true;
+            }
+            else if (hedgeInstrument % mStrategy.API.n == mStrategy.leanIndex % mStrategy.API.n)
+            {
+                if (price - mStrategy.API.GetImprovedCM(mStrategy.leanIndex) < 0)
+                    return true;
+            }
+            else //NO OTHER OPTIONS CURRNTLY
+                return false;
+
+            return false;
+        }
+
+
+        public bool TakeLimitPlus(int netPosition)
+        {
+            bool shouldHedgeNow = false;
+            int hedgeInstrument = GetHedgeInstrument(-netPosition);
+
+            if (netPosition > 0)
+                shouldHedgeNow = ShouldSellHedgeNow(hedgeInstrument);
+            else if (netPosition < 0)
+                shouldHedgeNow = ShouldBuyHedgeNow(hedgeInstrument);
+
+            if (shouldHedgeNow)
+            {
+                CancelAllHedgeOrders(hedgeInstrument);
+                bool success = HedgeNow(-netPosition, hedgeInstrument);
+                return success;
             }
 
             return false;

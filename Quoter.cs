@@ -5,7 +5,9 @@ using System.Collections.Generic;
 using KGClasses;
 using System.Reflection;
 using System.Xml;
+using System.Configuration;
 using System.Security.Cryptography;
+using System.Threading.Tasks;
 
 namespace StrategyRunner
 {
@@ -62,7 +64,7 @@ namespace StrategyRunner
 
         public static string logLevel = "info";
 
-        public Quoter(API api, QuoterConfig config, Throttler.EurexThrottler eurexThrottler)
+        public Quoter(API api, QuoterConfig config)
         {
             try
             {
@@ -154,7 +156,10 @@ namespace StrategyRunner
                 sell = new KGOrder();
                 strategyOrders.Add(sell);
 
-                this.eurexThrottler = eurexThrottler;
+                double ms = GetEurexThrottleSeconds() * 1000;
+                TimeSpan tEurex = new TimeSpan(0, 0, 0, 0, (int)ms);
+                eurexThrottler = new Throttler.EurexThrottler(GetEurexThrottleVolume(), tEurex);
+
                 orders = new Orders(this);
                 hedging = new Hedging(this);
 
@@ -220,59 +225,18 @@ namespace StrategyRunner
             return maxLossLimitHedge;
         }
 
-        private static double RoundToNearestTick(double price, double tick)
+        public double GetEurexThrottleSeconds()
         {
-            double numTicks = price / tick;
-            int roundedTicks = (int)Math.Round(numTicks, MidpointRounding.AwayFromZero);
-            double roundedPrice = roundedTicks * tick;
-
-            return roundedPrice;
+            if (eurexThrottleSeconds == -1)
+                return P.eurexThrottleSeconds;
+            return eurexThrottleSeconds;
         }
 
-        private (double bid, double ask) GetBidAsk(double theoreticalPrice, double tickSize, double width, int index)
+        public int GetEurexThrottleVolume()
         {
-            double bid = RoundToNearestTick(theoreticalPrice - width, tickSize);
-            double ask = RoundToNearestTick(theoreticalPrice + width, tickSize);
-
-            if (holding[index] > 0)
-            {
-                bid -= tickSize;
-                ask -= tickSize;
-            }
-            else if (holding[index] < 0)
-            {
-                bid += tickSize;
-                ask += tickSize;
-            }
-
-            while ((ask - bid) > 2 * width + 1e-9)
-            {
-                if ((ask - theoreticalPrice) > (theoreticalPrice - bid))
-                {
-                    ask -= tickSize;
-                }
-                else
-                {
-                    bid += tickSize;
-                }
-            }
-
-            if (bid < -10 || ask > 200)
-            {
-                return (-11, 11111);
-            }
-
-            return (RoundToNearestTick(bid, tickSize), RoundToNearestTick(ask, tickSize));
-        }
-
-        private (double bid, double ask) CenterAroundTheo(double theoreticalPrice, double bid, double ask, double tickSize)
-        {
-            double mid = (bid + ask) / 2;
-            double difference = theoreticalPrice - mid;
-            bid += difference;
-            ask += difference;
-
-            return (RoundToNearestTick(bid, tickSize), RoundToNearestTick(ask, tickSize));
+            if (eurexThrottleVolume == -1)
+                return P.eurexThrottleVolume;
+            return eurexThrottleVolume;
         }
 
         public override void OnStatusChanged(int status)
@@ -377,13 +341,15 @@ namespace StrategyRunner
                 {
                     lastBid = bidDepth[levelIndex].price;
                     cumulativeBidSize += bidDepth[levelIndex].qty;
+                    LogDebug(String.Format("STG {0}: [MM] [QUOTE_LONELINESS] bid={1} cum_size={2} level={3}", stgID, lastBid, cumulativeBidSize, levelIndex));
                     if (levelIndex < 5)
                         levelIndex++;
 
-                    if (cumulativeBidSize >= config.size * GetJoinFactor())
+                    if ((cumulativeBidSize >= config.size * GetJoinFactor()) | ((pricesAreEqual(buy.bid, lastBid)) &(cumulativeBidSize >= config.size * (GetJoinFactor()-2))))
                     {
                         bid = lastBid;
                         reachedSizeTH = true;
+                        LogDebug(String.Format("STG {0}: [MM] [QUOTE_LONELINESS] reached size threshold {1}, bid={2}", stgID, config.size * GetJoinFactor(), bid));
                     }
                 }
 
@@ -393,14 +359,25 @@ namespace StrategyRunner
                 {
                     lastAsk = askDepth[levelIndex].price;
                     cumulativeAskSize += askDepth[levelIndex].qty;
+                    LogDebug(String.Format("STG {0}: [MM] [QUOTE_LONELINESS] ask={1} cum_size={2} level={3}", stgID, lastAsk, cumulativeAskSize, levelIndex));
                     if (levelIndex < 5)
                         levelIndex++;
 
-                    if (cumulativeAskSize >= config.size * GetJoinFactor())
+                    if ((cumulativeAskSize >= config.size * GetJoinFactor()) | ((pricesAreEqual(sell.ask, lastAsk)) & (cumulativeAskSize >= config.size * (GetJoinFactor() - 2))))
                     {
                         ask = lastAsk;
                         reachedSizeTH = true;
+                        LogDebug(String.Format("STG {0}: [MM] [QUOTE_LONELINESS] reached size threshold {1}, ask={2}", stgID, config.size * GetJoinFactor(), ask));
                     }
+                }
+
+                if (pricesAreEqual(bid, -11))
+                {
+                    LogDebug(String.Format("STG {0}: [MM] [QUOTE_LONELINESS] failed to reach size threshold {1} (> cum_size={2})", stgID, config.size * GetJoinFactor(), cumulativeBidSize));
+                }
+                if (pricesAreEqual(ask, 11111))
+                {
+                    LogDebug(String.Format("STG {0}: [MM] [QUOTE_LONELINESS] failed to reach size threshold {1} (> cum_size={2})", stgID, config.size * GetJoinFactor(), cumulativeAskSize));
                 }
                 return (bid, ask);
             }
@@ -415,43 +392,65 @@ namespace StrategyRunner
         {
             double bid = -11;
             double ask = 11111;
-
-            List<DepthElement> allBids = new List<DepthElement>();
-            List<DepthElement> allAsks = new List<DepthElement>();
-
-            foreach (var instrument in instruments)
+            try
             {
-                allBids.AddRange(API.GetBidDepth(instrument));
-                allAsks.AddRange(API.GetAskDepth(instrument));
-            }
+                List<DepthElement> allBids = new List<DepthElement>();
+                List<DepthElement> allAsks = new List<DepthElement>();
 
-            allBids.Sort((x, y) => y.price.CompareTo(x.price));
-            allAsks.Sort((x, y) => x.price.CompareTo(y.price));
-
-            int cumulativeBidSize = 0;
-            int cumulativeAskSize = 0;
-
-            foreach (var bidElement in allBids)
-            {
-                cumulativeBidSize += bidElement.qty;
-                if (cumulativeBidSize >= config.size * GetJoinFactorAllVenues())
+                foreach (var instrument in instruments)
                 {
-                    bid = bidElement.price;
-                    break;
+                    allBids.AddRange(API.GetBidDepth(instrument));
+                    allAsks.AddRange(API.GetAskDepth(instrument));
                 }
-            }
 
-            foreach (var askElement in allAsks)
-            {
-                cumulativeAskSize += askElement.qty;
-                if (cumulativeAskSize >= config.size * GetJoinFactorAllVenues())
+                allBids.Sort((x, y) => y.price.CompareTo(x.price));
+                allAsks.Sort((x, y) => x.price.CompareTo(y.price));
+
+                int cumulativeBidSize = 0;
+                int cumulativeAskSize = 0;
+
+                foreach (var bidElement in allBids)
                 {
-                    ask = askElement.price;
-                    break;
-                }
-            }
+                    cumulativeBidSize += bidElement.qty;
+                    LogDebug(String.Format("STG {0}: [MM] [CROSS_LONELINESS] bid={1} cum_size={2}", stgID, bidElement.price, cumulativeBidSize));
 
-            return (bid, ask);
+                    if (cumulativeBidSize >= config.size * GetJoinFactorAllVenues())
+                    {
+                        LogDebug(String.Format("STG {0}: [MM] [CROSS_LONELINESS] reached size threshold {1} bid={2}", stgID, config.size * GetJoinFactorAllVenues(), bidElement.price));
+                        bid = bidElement.price;
+                        break;
+                    }
+                }
+
+                foreach (var askElement in allAsks)
+                {
+                    cumulativeAskSize += askElement.qty;
+                    LogDebug(String.Format("STG {0}: [MM] [CROSS_LONELINESS] ask={1} cum_size={2}", stgID, askElement.price, cumulativeAskSize));
+
+                    if (cumulativeAskSize >= config.size * GetJoinFactorAllVenues())
+                    {
+                        LogDebug(String.Format("STG {0}: [MM] [CROSS_LONELINESS] reached size threshold {1} ask={2}", stgID, config.size * GetJoinFactorAllVenues(), askElement.price));
+                        ask = askElement.price;
+                        break;
+                    }
+                }
+
+                if (pricesAreEqual(bid, -11))
+                {
+                    LogDebug(String.Format("STG {0}: [MM] [CROSS_LONELINESS] failed to reach size threshold {1} (> cum_size={2})", stgID, config.size * GetJoinFactorAllVenues(), cumulativeBidSize));
+                }
+                if (pricesAreEqual(ask, 11111))
+                {
+                    LogDebug(String.Format("STG {0}: [MM] [CROSS_LONELINESS] failed to reach size threshold {1} (> cum_size={2})", stgID, config.size * GetJoinFactorAllVenues(), cumulativeAskSize));
+                }
+
+                return (bid, ask);
+            }
+            catch (Exception e)
+            {
+                API.Log("getMinimumLonelinessConstrainedBidAsk ERR: " + e.ToString() + "," + e.StackTrace);
+                return (bid, ask);
+            }
         }
 
 
@@ -526,6 +525,9 @@ namespace StrategyRunner
                 orders.CheckPendingCancels();
                 hedging.CheckIOC();
 
+                if (API.GetTimeFromStart() >= 5113251263)
+                { }
+
                 VI vi = new VI(vit.v, vit.i);
                 int instrumentIndex = vi.i + API.n * vi.v;
 
@@ -558,19 +560,22 @@ namespace StrategyRunner
 
                 var (quoteBid, quoteAsk) = getMinimumLonelinessConstrainedBidAsk(crossVenueInstruments);
                 var (otherVenueBid, otherVenueAsk) = getMinimumLonelinessConstrainedBidAsk(quoteInstrument);
-                quoteBid = Math.Max(quoteBid, otherVenueBid);
-                quoteAsk = Math.Min(quoteAsk, otherVenueAsk);
+                quoteBid = Math.Round((Math.Min(quoteBid, otherVenueBid) - (tickSize / 2 - 1e-9)) / tickSize) * tickSize;
+                quoteAsk = Math.Round((Math.Max(quoteAsk, otherVenueAsk) + (tickSize / 2 - 1e-9)) / tickSize) * tickSize;
 
                 if (pricesAreEqual(quoteBid, -11) || pricesAreEqual(quoteAsk, 11111))
                 {
+                    if (instrumentIndex == quoteIndex && bids[instrumentIndex].qty >= 25 && asks[instrumentIndex].qty >= 25)
+                        LogDebug("not quoting despite volume on quote");
+
                     quote = false;
-                    LogDebug(String.Format("STG {0}: [MM] unable to calculate valid quote, bid={1} ask={2}", stgID, quoteBid, quoteAsk));
+                    LogDebug(String.Format("STG {0}: [MM] unable to calculate valid quote, bid={1} ask={2} time={3}", stgID, quoteBid, quoteAsk, API.GetTimeFromStart()));
                 }
 
                 if (quoteAsk - quoteBid - config.width > 1e-7) //UNABLE TO FULFILL LONELINESS CONDS
                 {
                     quote = false;
-                    LogDebug(String.Format("STG {0}: [MM] spread too wide, bid={1} ask={2} config_width={3}", stgID, quoteBid, quoteAsk, config.width));
+                    LogDebug(String.Format("STG {0}: [MM] spread too wide, bid={1} ask={2} config_width={3} time={4}", stgID, quoteBid, quoteAsk, config.width, API.GetTimeFromStart()));
                 }
                 else
                 {
@@ -607,13 +612,13 @@ namespace StrategyRunner
 
                         if (quoteBid < -10 || quoteAsk > 1000)
                         {
-                            LogDebug(String.Format("STG {0}: [MM] invalid quote after adjustment, bid={1} ask={2}", stgID, quoteBid, quoteAsk));
+                            LogDebug(String.Format("STG {0}: [MM] invalid quote after adjustment, bid={1} ask={2} time={3}", stgID, quoteBid, quoteAsk, API.GetTimeFromStart()));
                             quote = false;
                         }
 
                         if (quoteAsk - quoteBid > config.width + 1e-9)
                         {
-                            LogDebug(String.Format("STG {0}: [MM] spread too wide after adjustment, bid={1} ask={2} config_width={3}", stgID, quoteBid, quoteAsk, config.width));
+                            LogDebug(String.Format("STG {0}: [MM] spread too wide after adjustment, bid={1} ask={2} config_width={3} time={4}", stgID, quoteBid, quoteAsk, config.width, API.GetTimeFromStart()));
                             quote = false;
                         }
                     }
@@ -627,13 +632,13 @@ namespace StrategyRunner
                     {
                         if (orders.orderInUse(buy) && !orders.orderInTransientState(buy))
                         {
-                            LogDebug(String.Format("STG {0}: [MM] quoting req not met, cancel buy order {1}", stgID, buy.internalOrderNumber));
+                            LogDebug(String.Format("STG {0}: [MM] quoting req not met, cancel buy order {1} time={2}", stgID, buy.internalOrderNumber, API.GetTimeFromStart()));
                             orders.CancelOrder(buy);
                         }
 
                         if (orders.orderInUse(sell) && !orders.orderInTransientState(sell))
                         {
-                            LogDebug(String.Format("STG {0}: [MM] quoting req not met, cancel sell order {1}", stgID, sell.internalOrderNumber));
+                            LogDebug(String.Format("STG {0}: [MM] quoting req not met, cancel sell order {1} time={2}", stgID, sell.internalOrderNumber, API.GetTimeFromStart()));
                             orders.CancelOrder(sell);
                         }
 
@@ -646,7 +651,7 @@ namespace StrategyRunner
                         {
                             if (!orders.orderInTransientState(buy))
                             {
-                                LogDebug(String.Format("STG {0}: [MM] lean move, cancel buy order {1}", stgID, buy.internalOrderNumber));
+                                LogDebug(String.Format("STG {0}: [MM] lean move, cancel buy order {1} time={2}", stgID, buy.internalOrderNumber, API.GetTimeFromStart()));
                                 orders.CancelOrder(buy);
                             }
                         }
@@ -657,7 +662,7 @@ namespace StrategyRunner
                         {
                             if (!orders.orderInTransientState(sell))
                             {
-                                LogDebug(String.Format("STG {0}: [MM] lean move, cancel sell order {1}", stgID, sell.internalOrderNumber));
+                                LogDebug(String.Format("STG {0}: [MM] lean move, cancel sell order {1} time={2}", stgID, sell.internalOrderNumber, API.GetTimeFromStart()));
                                 orders.CancelOrder(sell);
                             }
                         }
@@ -689,13 +694,13 @@ namespace StrategyRunner
 
                     if (orders.orderInUse(buy) && !pricesAreEqual(buy.bid, quoteBid))
                     {
-                        LogDebug(String.Format("STG {0}: [MM] hedging position={1}, buy order in use, buy_bid={2} != quote_bid={3}, cancelling", stgID, netHolding, buy.bid, quoteBid));
+                        LogDebug(String.Format("STG {0}: [MM] hedging position={1}, buy order in use, buy_bid={2} != quote_bid={3}, cancelling. time={4}", stgID, netHolding, buy.bid, quoteBid, API.GetTimeFromStart()));
                         orders.CancelOrder(buy);
                     }
 
                     if (orders.orderInUse(sell) && !pricesAreEqual(sell.ask, quoteAsk))
                     {
-                        LogDebug(String.Format("STG {0}: [MM] hedging position={1}, sell order in use, sell_ask={2} != quote_ask={3}, cancelling", stgID, netHolding, sell.ask, quoteAsk));
+                        LogDebug(String.Format("STG {0}: [MM] hedging position={1}, sell order in use, sell_ask={2} != quote_ask={3}, cancelling. time={4}", stgID, netHolding, sell.ask, quoteAsk, API.GetTimeFromStart()));
                         orders.CancelOrder(sell);
                     }
 
@@ -711,36 +716,44 @@ namespace StrategyRunner
                 {
                     double theo = API.GetImprovedCM(quoteIndex);
                     double mid = (quoteBid + quoteAsk) / 2;
-                    if (theo > mid)
+                    if ((buy.bidSize == quoteSizeBid * 2 + 1) & (theo > mid - tickSize*0.3))
+                    {
+                        quoteSizeBid = buy.bidSize;
+                    }
+                    else if ((sell.askSize == quoteSizeAsk * 2 + 1) & (theo < mid + tickSize * 0.3))
+                    {
+                        quoteSizeAsk = sell.askSize;
+                    }
+                    else if (theo > mid)
                     {
                         quoteSizeBid = quoteSizeBid * 2 + 1;
-                        LogDebug(String.Format("STG {0}: [MM] asymmetric quoting: theo={1} > mid={2}, quote_size_bid={3} quote_size_ask={4}", stgID, theo, mid, quoteSizeBid, quoteSizeAsk));
+                        LogDebug(String.Format("STG {0}: [MM] asymmetric quoting: theo={1} > mid={2}, quote_size_bid={3} quote_size_ask={4} time={5}", stgID, theo, mid, quoteSizeBid, quoteSizeAsk, API.GetTimeFromStart()));
                     }
                     else
                     {
                         quoteSizeAsk = quoteSizeAsk * 2 + 1;
-                        LogDebug(String.Format("STG {0}: [MM] asymmetric quoting: theo={1} <= mid={2}, quote_size_bid={3} quote_size_ask={4}", stgID, theo, mid, quoteSizeBid, quoteSizeAsk));
+                        LogDebug(String.Format("STG {0}: [MM] asymmetric quoting: theo={1} <= mid={2}, quote_size_bid={3} quote_size_ask={4} time={5}", stgID, theo, mid, quoteSizeBid, quoteSizeAsk, API.GetTimeFromStart()));
                     }
                 }
 
                 if (!orders.orderInTransientState(buy) && quote && (!pricesAreEqual(buy.bid, quoteBid) || buy.bidSize != quoteSizeBid))
                 {
-                    LogDebug(String.Format("STG {0}: [MM] posting buy order instrument={1} bid={2} bid_size={3}", stgID, quoteIndex, quoteBid, quoteSizeBid));
+                    LogDebug(String.Format("STG {0}: [MM] posting buy order instrument={1} bid={2} bid_size={3} time={4}", stgID, quoteIndex, quoteBid, quoteSizeBid, API.GetTimeFromStart()));
                     orders.SendOrder(buy, quoteIndex, Side.BUY, quoteBid, quoteSizeBid, "MM", true);
                 }
                 else if (quote)
                 {
-                    LogDebug(String.Format("STG {0}: [MM] NOT posting buy order instrument={1} bid={2} order_bid={3} bid_size={4} order_bid_size={5} order_status={6} order_internal={7} order_no={8}", stgID, quoteIndex, quoteBid, buy.bid, quoteSizeBid, buy.bidSize, buy.orderStatus, buy.internalOrderNumber, buy.orderNumber));
+                    LogDebug(String.Format("STG {0}: [MM] NOT posting buy order instrument={1} bid={2} order_bid={3} bid_size={4} order_bid_size={5} order_status={6} order_internal={7} order_no={8} time={9}", stgID, quoteIndex, quoteBid, buy.bid, quoteSizeBid, buy.bidSize, buy.orderStatus, buy.internalOrderNumber, buy.orderNumber, API.GetTimeFromStart()));
                 }
 
                 if (!orders.orderInTransientState(sell) && quote && (!pricesAreEqual(sell.ask, quoteAsk) || sell.askSize != quoteSizeAsk))
                 {
-                    LogDebug(String.Format("STG {0}: [MM] posting sell order instrument={1} ask={2} ask_size={3}", stgID, quoteIndex, quoteAsk, quoteSizeAsk));
+                    LogDebug(String.Format("STG {0}: [MM] posting sell order instrument={1} ask={2} ask_size={3} time={4}", stgID, quoteIndex, quoteAsk, quoteSizeAsk, API.GetTimeFromStart()));
                     orders.SendOrder(sell, quoteIndex, Side.SELL, quoteAsk, quoteSizeAsk, "MM", true);
                 }
                 else if (quote)
                 {
-                    LogDebug(String.Format("STG {0}: [MM] NOT posting sell order instrument={1} ask={2} order_ask={3} ask_size={4} order_ask_size={5} order_status={6} order_internal={7} order_no={8}", stgID, quoteIndex, quoteAsk, sell.ask, quoteSizeAsk, sell.askSize, sell.orderStatus, sell.internalOrderNumber, sell.orderNumber));
+                    LogDebug(String.Format("STG {0}: [MM] NOT posting sell order instrument={1} ask={2} order_ask={3} ask_size={4} order_ask_size={5} order_status={6} order_internal={7} order_no={8} time={9}", stgID, quoteIndex, quoteAsk, sell.ask, quoteSizeAsk, sell.askSize, sell.orderStatus, sell.internalOrderNumber, sell.orderNumber, API.GetTimeFromStart()));
                 }
             }
             catch (Exception e)
@@ -758,6 +771,8 @@ namespace StrategyRunner
         {
             throttler.updateTimespan(GetQuoteThrottleSeconds());
             throttler.updateMaxVolume(GetQuoteThrottleVolume());
+            eurexThrottler.updateMaxVolume(GetEurexThrottleVolume());
+            eurexThrottler.updateTimespan(GetEurexThrottleSeconds());
         }
 
         public override void OnDeal(KGDeal deal)

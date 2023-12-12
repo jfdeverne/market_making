@@ -284,10 +284,6 @@ namespace StrategyRunner
 
         public static List<VariableInfo> vars = new List<VariableInfo>();
 
-        public static double eurexThrottleSeconds = -1;
-        public static int eurexThrottleVolume = -1;
-        Throttler.EurexThrottler eurexThrottler;
-
         Dictionary<string, int> volumePerInstrument;
 
         StrategyRunner()
@@ -302,9 +298,6 @@ namespace StrategyRunner
                     gitVersion = reader.ReadToEnd();
                 }
             }
-            double ms = GetEurexThrottleSeconds() * 1000;
-            TimeSpan t = new TimeSpan(0, 0, 0, 0, (int)ms);
-            eurexThrottler = new Throttler.EurexThrottler(GetEurexThrottleVolume(), t);
 
             volumePerInstrument = new Dictionary<string, int>();
 
@@ -342,20 +335,6 @@ namespace StrategyRunner
             API.Connect();
         }
 
-        private double GetEurexThrottleSeconds()
-        {
-            if (eurexThrottleSeconds == -1)
-                return P.eurexThrottleSeconds;
-            return eurexThrottleSeconds;
-        }
-
-        private int GetEurexThrottleVolume()
-        {
-            if (eurexThrottleVolume == -1)
-                return P.eurexThrottleVolume;
-            return eurexThrottleVolume;
-        }
-
         private void API_OnStrategyParamUpdate(string paramName, string paramVal)
         {
             try
@@ -367,10 +346,6 @@ namespace StrategyRunner
                 {
                     paramName = paramName.Substring(sInd + 2);
                     P.SetValue(paramName, paramVal);
-                    if (paramName == "eurexThrottleVolume")
-                        eurexThrottler.updateMaxVolume(GetEurexThrottleVolume());
-                    if (paramName == "eurexThrottleSeconds")
-                        eurexThrottler.updateTimespan(GetEurexThrottleSeconds());
                     
                     foreach (var strategy in strategies)
                     {
@@ -628,7 +603,7 @@ namespace StrategyRunner
                         config.crossVenueInstruments.Add(config.leanInstrument);
                     }
 
-                    Strategy s = new Quoter(API, config, eurexThrottler);
+                    Strategy s = new Quoter(API, config);
                     strategies[s.stgID] = s;
                 }
 
@@ -688,7 +663,7 @@ namespace StrategyRunner
                         config.crossVenueInstruments.Add(config.farInstrument);
                     }
 
-                    Strategy s = new BV(API, config, eurexThrottler);
+                    Strategy s = new BV(API, config);
                     strategies[s.stgID] = s;
                 }
 
@@ -738,7 +713,7 @@ namespace StrategyRunner
                         config.crossVenueInstruments.Add(config.farInstrument);
                     }
 
-                    Strategy s = new LimitBV(API, config, eurexThrottler);
+                    Strategy s = new LimitBV(API, config);
                     strategies[s.stgID] = s;
 
                     //if (API.GetSecurityNumber(s.quoteIndex, 0).Length > 9) //NOT OUTRIGHT

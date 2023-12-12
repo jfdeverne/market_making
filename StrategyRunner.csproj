@@ -109,8 +109,8 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="BaseSpreads.cs" />
     <Compile Include="BV.cs" />
+    <Compile Include="LimitBV.cs" />
     <Compile Include="Quoter.cs" />
     <Compile Include="Strategy.cs" />
     <Compile Include="Hedging.cs" />

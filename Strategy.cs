@@ -53,6 +53,9 @@ namespace StrategyRunner
         public static double maxLossMarketHedge = -1;
         public static double maxLossLimitHedge = -1;
 
+        public static double eurexThrottleSeconds = -1;
+        public static int eurexThrottleVolume = -1;
+
         public Throttler.EurexThrottler eurexThrottler;
     }
 }

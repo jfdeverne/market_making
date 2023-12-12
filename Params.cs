@@ -48,7 +48,7 @@ namespace StrategyRunner
         public static int eurexThrottleVolume = 100000;
         public static double eurexThrottleSeconds = 1;
 
-        public static int bfTriggerVolume = 100;
+        public static int bfTriggerVolume = 1000000;
         public static int bfTriggerTradeCount = 5;
         public static double bfTriggerSeconds = 5;
         public static double bfTimeoutSeconds = 30;
@@ -141,47 +141,6 @@ namespace StrategyRunner
                     return ret;
                 }
                 SetValue(parts[0].Trim(), parts[1].Trim());
-                //foreach (FieldInfo field in typeof(P).GetFields())
-                //{
-                //    first = parts[0].Trim();
-                //    if (field.Name != first)
-                //        continue;
-                //    else
-                //    {
-                //        found = true;
-                //        string second = parts[1].Trim();                        
-                //        if (field.FieldType == typeof(int))
-                //        {
-                //            int val = Int32.Parse(second);
-                //            field.SetValue(null, val);
-                //        }
-                //        else if (field.FieldType == typeof(string))
-                //        {
-                //            field.SetValue(null, second);
-                //        }
-                //        else if (field.FieldType == typeof(double))
-                //        {
-                //            double val = Double.Parse(second);
-                //            field.SetValue(null, val);
-                //        }
-                //        else if (field.FieldType == typeof(bool))
-                //        {
-                //            if (second == "true")
-                //                field.SetValue(null, true);
-                //            else
-                //                field.SetValue(null, false);
-                //        }
-                //        else if (field.FieldType == typeof(long))
-                //        {
-                //            long val = long.Parse(second);
-                //            field.SetValue(null, val);                            
-                //        }
-                //        break;
-                //    } //end else
-                //} // end foreach
-
-                //if (!found)
-                //    ret += "::UPDATEPARAMS ERR - Parameter " + first + " isn't defined in KG";
             } //end -for matchCollection
                      
             return ret;

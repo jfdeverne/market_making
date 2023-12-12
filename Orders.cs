@@ -30,6 +30,14 @@ namespace StrategyRunner
             {
                 return true;
             }
+            else if (order.orderStatus == 9)
+            {
+                if (order.bidSize < 0 && order.askSize < 0)
+                {
+                    return false;
+                }
+                return true;
+            }
             return false;
         }
 
@@ -106,11 +114,11 @@ namespace StrategyRunner
             if (ord.orderStatus == 2)
                 ord.orderStatus = 0;
 
-            /*if (ord.VenueID == 1 && !mStrategy.eurexThrottler.addTrade())
+            if (ord.VenueID == 1 && !mStrategy.eurexThrottler.addTrade())
             {
                 Log(String.Format("max eurex order rate reached"));
                 return -1;
-            }*/
+            }
 
             mStrategy.API.PostOrder(ord, mStrategy.stgID);
 
@@ -137,10 +145,10 @@ namespace StrategyRunner
             mStrategy.API.PostOrder(ord, mStrategy.stgID);
             mStrategy.API.Log(String.Format("[ORDERS] CancelOrder Post status={0} order={1}", ord.orderStatus, ord.internalOrderNumber));
 
-            /*if (ord.VenueID == 1 && !mStrategy.eurexThrottler.addTrade())
+            if (ord.VenueID == 1 && !mStrategy.eurexThrottler.addTrade())
             {
                 Log(String.Format("max eurex order rate reached, allowing cancellation"));
-            }*/
+            }
             return true;
         }
         public void CancelOrder(int id)

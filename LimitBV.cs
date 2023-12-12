@@ -73,7 +73,7 @@ namespace StrategyRunner
         public bool bf = false;
         public double bfPrice = -11;
 
-        public LimitBV(API api, BVConfig config, Throttler.EurexThrottler eurexThrottler)
+        public LimitBV(API api, BVConfig config)
         {
             try
             {
@@ -184,7 +184,10 @@ namespace StrategyRunner
                 pendingTrades = new Dictionary<int, int>();
                 pendingResubmissions = new Dictionary<int, int>();
 
-                this.eurexThrottler = eurexThrottler;
+                double ms = GetEurexThrottleSeconds() * 1000;
+                TimeSpan t = new TimeSpan(0, 0, 0, 0, (int)ms);
+                eurexThrottler = new Throttler.EurexThrottler(GetEurexThrottleVolume(), t);
+
                 orders = new Orders(this);
                 hedging = new Hedging(this);
 
@@ -240,7 +243,7 @@ namespace StrategyRunner
             return bvThrottleVolume;
         }
 
-        private double GetCreditOffset()
+        public double GetCreditOffset()
         {
             if (creditOffset == -1)
                 return P.creditOffset;
@@ -312,6 +315,20 @@ namespace StrategyRunner
             return maxLossLimitHedge;
         }
 
+        private double GetEurexThrottleSeconds()
+        {
+            if (eurexThrottleSeconds == -1)
+                return P.eurexThrottleSeconds;
+            return eurexThrottleSeconds;
+        }
+
+        private int GetEurexThrottleVolume()
+        {
+            if (eurexThrottleVolume == -1)
+                return P.eurexThrottleVolume;
+            return eurexThrottleVolume;
+        }
+
         private void Log(string message)
         {
             API.Log(String.Format("STG {0}: {1}", stgID, message));
@@ -377,15 +394,6 @@ namespace StrategyRunner
             API.SendToRemote(String.Format("CANCEL STG {0}: {1}", stgID, reason), KGConstants.EVENT_ERROR);
         }
 
-        //public override int GetNetPosition()
-        //{
-        //    int netHolding = holding[quoteIndex];
-        //    if (farIndex != quoteIndex) //== IN CASE OF BF
-        //        netHolding += holding[farIndex];
-        //    if (leanIndex != farIndex)
-        //        netHolding += holding[leanIndex];
-        //    return netHolding;
-        //}
         public override int GetNetPosition()
         {
             int netHolding = 0;
@@ -528,6 +536,10 @@ namespace StrategyRunner
                         ordId = orders.SendOrder(limitBuy, limitBVBuyIndex, Side.BUY, limitBVBuyPrice, qty, "LIMIT_BV");
                     }
                 }
+                else
+                    if (orders.orderInUse(limitBuy))
+                        orders.CancelOrder(limitBuy);
+
 
                 qty = 0;
                 theBVPrice = Math.Min(asks[farIndex].price, asks[quoteIndex].price);
@@ -566,6 +578,11 @@ namespace StrategyRunner
                         ordId = orders.SendOrder(limitSell, limitBVSellIndex, Side.SELL, limitBVSellPrice, qty, "LIMIT_BV");
                     }
                 }
+                else
+                    if (orders.orderInUse(limitSell))
+                        orders.CancelOrder(limitSell);
+
+
 
                 //API.Log("<--SendLimitOrders");
             }
@@ -620,15 +637,15 @@ namespace StrategyRunner
                 bids[instrumentIndex] = API.GetBid(vi);
                 asks[instrumentIndex] = API.GetAsk(vi);
 
-                int previousVolume = marketVolumeTraded[instrumentIndex];
-                int currentVolume = API.GetVolume(vit);
-                marketVolumeTraded[instrumentIndex] = currentVolume;
-                int lastTradeVolume = currentVolume - previousVolume;
-                double price = API.GetLast(vi).price;
-
                 bool bfTrigger = false;
-                if (vi.i == 1) //eurex
+                double price = 0.0; 
+                if (instrumentIndex == quoteIndex)
                 {
+                    int previousVolume = marketVolumeTraded[instrumentIndex];
+                    int currentVolume = API.GetVolume(vit);
+                    marketVolumeTraded[instrumentIndex] = currentVolume;
+                    int lastTradeVolume = currentVolume - previousVolume;
+                    price = API.GetLast(vi).price;
                     bfTrigger = bfDetector.addTrade(lastTradeVolume, price);
                 }
 
@@ -654,7 +671,7 @@ namespace StrategyRunner
                 }
 
                 if (!bf && bfTrigger)
-                    BF(price, instrumentIndex);
+                    BF(bfPrice, instrumentIndex);
 
                 SendLimitOrders();
                 CancelOnPriceMove(instrumentIndex);
@@ -677,6 +694,9 @@ namespace StrategyRunner
             bfDetector.updateTriggerVolume(GetBFTriggerVolume());
             bfDetector.updateTriggerTradeCount(GetBFTriggerTradeCount());
             bfDetector.updateTimespan(GetBFTriggerSeconds());
+
+            eurexThrottler.updateMaxVolume(GetEurexThrottleVolume());
+            eurexThrottler.updateTimespan(GetEurexThrottleSeconds());
 
             double bvTimeoutSeconds = GetBvTimeoutSeconds();
             if (bvTimeoutSeconds > 0)
@@ -763,13 +783,6 @@ namespace StrategyRunner
                 if (deal.source != "LIMIT_BV")
                     return;
 
-                //bool executeOtherLeg = false;
-                //int netHolding = GetNetPosition();
-                //if (netHolding >= Math.Min(bids[limitBuy.index].qty / 2, GetMaxCrossVolume()) - 1)
-                //    executeOtherLeg = true;
-                //else if (-netHolding >= Math.Max(asks[limitSell.index].qty / 2, GetMaxCrossVolume()) - 1)
-                //    executeOtherLeg = true;
-                //if (executeOtherLeg)
                 ExecuteOtherLegAtMarket(instrumentIndex, amount);
             }
             catch (Exception e)

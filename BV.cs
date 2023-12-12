@@ -92,7 +92,7 @@ namespace StrategyRunner
         public static double bvTimeoutSeconds = -1;
         public static double bvMaxLoss = -1;
 
-        public BV(API api, BVConfig config, Throttler.EurexThrottler eurexThrottler)
+        public BV(API api, BVConfig config)
         {
             try
             {
@@ -193,7 +193,10 @@ namespace StrategyRunner
                 pendingTrades = new Dictionary<int, int>();
                 pendingResubmissions = new Dictionary<int, int>();
 
-                this.eurexThrottler = eurexThrottler;
+                double ms = GetEurexThrottleSeconds() * 1000;
+                TimeSpan t = new TimeSpan(0, 0, 0, 0, (int)ms);
+                eurexThrottler = new Throttler.EurexThrottler(GetEurexThrottleVolume(), t);
+
                 orders = new Orders(this);
                 hedging = new Hedging(this);
 
@@ -269,6 +272,20 @@ namespace StrategyRunner
             if (maxLossMarketHedge == -1)
                 return P.maxLossLimitHedge;
             return maxLossLimitHedge;
+        }
+
+        private double GetEurexThrottleSeconds()
+        {
+            if (eurexThrottleSeconds == -1)
+                return P.eurexThrottleSeconds;
+            return eurexThrottleSeconds;
+        }
+
+        private int GetEurexThrottleVolume()
+        {
+            if (eurexThrottleVolume == -1)
+                return P.eurexThrottleVolume;
+            return eurexThrottleVolume;
         }
 
         private void Log(string message)
@@ -572,6 +589,9 @@ namespace StrategyRunner
         {
             bvThrottler.updateMaxVolume(GetBvThrottleVolume());
             bvThrottler.updateTimespan(GetBvThrottleSeconds());
+
+            eurexThrottler.updateMaxVolume(GetEurexThrottleVolume());
+            eurexThrottler.updateTimespan(GetEurexThrottleSeconds());
 
             double bvTimeoutSeconds = GetBvTimeoutSeconds();
             if (bvTimeoutSeconds > 0)
