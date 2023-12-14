@@ -62,7 +62,6 @@ namespace StrategyRunner
         public static int minPosNear = -1;
         public static int maxPosFar = -1;
         public static int minPosFar = -1;
-        public static int bvMaxOutstandingOutrights = -1;
         public static double bvTimeoutSeconds = -1;
         public static double bvMaxLoss = -1;
 
@@ -70,6 +69,8 @@ namespace StrategyRunner
         public static int bfTriggerTradeCount = -1;
         public static double bfTriggerSeconds = -1;
         public static double bfTimeoutSeconds = -1;
+
+        public static string logLevel = "info";
 
         public bool bf = false;
         public double bfPrice = -11;
@@ -290,12 +291,6 @@ namespace StrategyRunner
                 return P.minPosFar;
             return minPosFar;
         }
-        private int GetBvMaxOutstandingOutrights()
-        {
-            if (bvMaxOutstandingOutrights == -1)
-                return P.bvMaxOutstandingOutrights;
-            return bvMaxOutstandingOutrights;
-        }
 
         private double GetBvTimeoutSeconds()
         {
@@ -329,6 +324,11 @@ namespace StrategyRunner
             if (eurexThrottleVolume == -1)
                 return P.eurexThrottleVolume;
             return eurexThrottleVolume;
+        }
+
+        public override string GetLogLevel()
+        {
+            return logLevel;
         }
 
         private void Log(string message)
@@ -410,14 +410,6 @@ namespace StrategyRunner
                 netHolding += holding[instrument];
             }
 
-            return netHolding;
-        }
-
-        private int GetQuotedPosition()
-        {
-            int netHolding = holding[quoteIndex];
-            if (farIndex != quoteIndex) //== IN CASE OF BF
-                netHolding += holding[farIndex];
             return netHolding;
         }
 
@@ -503,26 +495,20 @@ namespace StrategyRunner
         {
             try
             {
-                //API.Log("-->SendLimitOrders");
-
                 int ordId;
-                //KGOrder tmpOrd = null;
                 int qty = 0;
                 double theBVPrice = Math.Max(bids[farIndex].price, bids[quoteIndex].price);
                 if (isBuyPreferred(theBVPrice) && (holding[leanIndex] > -GetMaxOutrights()))
                 {
                     if (bids[farIndex].price <= bids[quoteIndex].price)
                     {
-                        //if ((GetQuotedPosition() > -GetBvMaxOutstandingOutrights()) && (holding[leanIndex] > -GetMaxOutrights()) && (!orders.orderInUse(limitBuyFar)))
                         if (((holding[farIndex] < GetMaxPosFar()) | (farIndex == quoteIndex)) && (!orders.orderInUse(limitBuy)))
                         {
                             double tickSize = API.GetTickSize(farIndex);
-                            //limitBVBuyPrice = theBVPrice;
                             limitBVBuyPrice = Math.Round((theBVPrice -(tickSize / 2 - 1e-9)) / tickSize) * tickSize;
                             limitBVBuyIndex = farIndex;
                             limitBVSellIndex = quoteIndex;
                             qty = Math.Min(bids[quoteIndex].qty / 2, GetMaxCrossVolume());
-                            //tmpOrd = limitBuyFar;
                         }
                     }
                     if (bids[farIndex].price >= bids[quoteIndex].price)
@@ -532,12 +518,10 @@ namespace StrategyRunner
                             if ((bids[farIndex].price > bids[quoteIndex].price) || (bids[farIndex].qty > bids[quoteIndex].qty))
                             {
                                 double tickSize = API.GetTickSize(quoteIndex);
-                                //limitBVBuyPrice = theBVPrice;
                                 limitBVBuyPrice = Math.Round((theBVPrice - (tickSize / 2 - 1e-9)) / tickSize) * tickSize;
                                 limitBVBuyIndex = quoteIndex;
                                 limitBVSellIndex = farIndex;
                                 qty = Math.Min(bids[farIndex].qty / 2, GetMaxCrossVolume());
-                                //tmpOrd = limitBuy;
                             }
                         }
                     }
@@ -561,11 +545,9 @@ namespace StrategyRunner
                 {
                     if (asks[farIndex].price >= asks[quoteIndex].price)
                     {
-                        //if ((GetQuotedPosition() < P.bvMaxOutstandingOutrights) && (holding[leanIndex] < GetMaxOutrights()) && (!orders.orderInUse(limitSellFar)))
                         if (((holding[farIndex] > GetMinPosFar()) | (farIndex == quoteIndex)) && (!orders.orderInUse(limitSell)))
                         {
                             double tickSize = API.GetTickSize(farIndex);
-                            //limitBVSellPrice = theBVPrice;
                             limitBVSellPrice = Math.Round((theBVPrice + (tickSize / 2 - 1e-9)) / tickSize) * tickSize;
                             limitBVSellIndex = farIndex;
                             limitBVBuyIndex = quoteIndex;
@@ -579,7 +561,6 @@ namespace StrategyRunner
                             if ((asks[farIndex].price < asks[quoteIndex].price) || (asks[farIndex].qty > asks[quoteIndex].qty))
                             {
                                 double tickSize = API.GetTickSize(quoteIndex);
-                                //limitBVSellPrice = theBVPrice;
                                 limitBVSellPrice = Math.Round((theBVPrice + (tickSize / 2 - 1e-9)) / tickSize) * tickSize;
                                 limitBVSellIndex = quoteIndex;
                                 limitBVBuyIndex = farIndex;
@@ -599,8 +580,6 @@ namespace StrategyRunner
                 else
                     if (orders.orderInUse(limitSell))
                         orders.CancelOrder(limitSell);
-
-                //API.Log("<--SendLimitOrders");
             }
             catch (Exception e)
             {
@@ -660,6 +639,34 @@ namespace StrategyRunner
             }
         }
 
+        private void SpreadTrader(double targetSpread)
+        {
+            double bid = bids[quoteIndex].price - asks[leanIndex].price;
+            double ask = asks[quoteIndex].price - bids[leanIndex].price;
+            
+            double bidSize = asks[leanIndex].qty;
+            double askSize = bids[leanIndex].qty;
+
+            //TODO: implement non-hedging limitplus logic (?)
+            //design question: this can be as a special case of hedging where one instrument (or instrument on any venue forming an EUS?) is preferred over the others
+            //  until it's considered to have ran away in which case we revert to hedging as normal
+
+            //it can also be seen as separate from hedging in which case we probably want a working LimitPlus logic in Orders.cs or entirely separate,
+            //  and then once we give up due to a timeout or price/volume running away, we send it to hedging, like in other (limit)bv venutres
+
+
+            if (Math.Abs(targetSpread - bid) < 0.001 && bidSize > 1000)
+            {
+                //orders.SendOrder(sell, quoteIndex, Side.SELL, bids[quoteIndex].price, GetQuantity(), "SPREAD_TRADER");
+                //orders.SendLimitPlus(buy, leanIndex, Side.BUY, GetLimitPlusBuyPrice(), GetQuantity(), "SPREAD_TRADER");
+            }
+            else if (Math.Abs(targetSpread - ask) < 0.001 && askSize > 1000)
+            {
+                //orders.SendOrder(buy, quoteIndex, Side.BUY, asks[quoteIndex].price, GetQuantity(), "SPREAD_TRADER");
+                //orders.SendLimitPlus(sell, leanIndex, Side.SELL, GetLimitPlusSellPrice(), GetQuantity(), "SPREAD_TRADER");
+            }
+        }
+
         public override void OnProcessMD(VIT vit)
         {
             try
@@ -695,6 +702,9 @@ namespace StrategyRunner
                 orders.OnProcessMD();
                 orders.CheckPendingCancels();
                 hedging.CheckIOC();
+
+                //SpreadTrader();
+                //return;
 
                 if (GetNetPosition() != 0)
                 {
@@ -907,8 +917,8 @@ namespace StrategyRunner
                         field.SetValue(null, val);
                     }
                     break;
-                } //end else
-            } // end foreach
+                }
+            }
 
             return (valueChanged, ret);
         }

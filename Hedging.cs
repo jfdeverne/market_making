@@ -1,5 +1,6 @@
 ﻿using Detail;
 using KGClasses;
+using StrategyLib;
 using System;
 using System.Collections.Generic;
 
@@ -65,6 +66,12 @@ namespace StrategyRunner
         {
             mStrategy.API.Log(String.Format("STG {0}: {1}", mStrategy.stgID, message));
             mStrategy.API.SendToRemote(message, KGConstants.EVENT_GENERAL_INFO);
+        }
+
+        void LogDebug(string message)
+        {
+            if (mStrategy.GetLogLevel() == "debug")
+                mStrategy.API.Log(String.Format("STG {0}: [HEDGING] {1}", mStrategy.stgID, message));
         }
 
         double GetLimitPlusBuyPrice(int index)
@@ -330,13 +337,17 @@ namespace StrategyRunner
 
             if (netPosition > 0)
             {
+                LogDebug(String.Format("hedging position {0}", netPosition));
                 foreach (var perInstrument in sellOrders)
                 {
                     var index = perInstrument.Key;
                     var order = perInstrument.Value;
 
                     if (mOrders.orderInTransientState(order))
-                        return;
+                    {
+                        LogDebug(String.Format("order instrument={0} internal={1} number={2} in transient state, continuing", index, order.internalOrderNumber, order.orderNumber));
+                        continue;
+                    }
 
                     if (order.bidSize > 0 && order.askSize > 0)
                     {
@@ -349,18 +360,28 @@ namespace StrategyRunner
 
                     if (mOrders.orderInUse(order) && order.ask <= theoThreshold - (mStrategy.GetMaxLossLimitHedge() / 2.0))
                     {
+                        LogDebug(String.Format("cancelling order instrument={0} internal={1} number={2}: ask={3} <= threshold={4}+maxLossFactor", index, order.internalOrderNumber, order.orderNumber, order.ask, theoThreshold));
                         mOrders.CancelOrder(order);
                         continue;
                     }
 
                     if (order.askSize == netPosition && pricesAreEqual(order.ask, price))
+                    {
+                        LogDebug(String.Format("desired sell order instrument={0} internal={1} number={2} already working, continuing", index, order.internalOrderNumber, order.orderNumber));
                         continue;
+                    }
 
                     if (price <= theoThreshold)
                     {
                         if (mOrders.orderInUse(order))
+                        {
+                            LogDebug(String.Format("cancelling working order instrument={0} internal={1} number={2}, price={3} <= theo_threshold={4}", index, order.internalOrderNumber, order.orderNumber, price, theoThreshold));
                             mOrders.CancelOrder(order);
-
+                        }
+                        else
+                        {
+                            LogDebug(String.Format("order for instrument={0} will not be submitted, price={1} <= theo_threshold={2}", index, price, theoThreshold));
+                        }
                         continue;
                     }
 
@@ -369,13 +390,17 @@ namespace StrategyRunner
             }
             else if (netPosition < 0)
             {
+                LogDebug(String.Format("hedging position {0}", netPosition));
                 foreach (var perInstrument in buyOrders)
                 {
                     var index = perInstrument.Key;
                     var order = perInstrument.Value;
 
                     if (mOrders.orderInTransientState(order))
-                        return;
+                    {
+                        LogDebug(String.Format("order instrument={0} internal={1} number={2} in transient state, continuing", index, order.internalOrderNumber, order.orderNumber));
+                        continue;
+                    }
 
                     if (order.bidSize > 0 && order.askSize > 0)
                     {
@@ -388,17 +413,28 @@ namespace StrategyRunner
 
                     if (mOrders.orderInUse(order) && order.bid >= theoThreshold + (mStrategy.GetMaxLossLimitHedge() / 2.0))
                     {
+                        LogDebug(String.Format("cancelling order instrument={0} internal={1} number={2}: bid={3} >= threshold={4}+maxLossFactor", index, order.internalOrderNumber, order.orderNumber, order.bid, theoThreshold));
                         mOrders.CancelOrder(order);
                         continue;
                     }
 
                     if (order.bidSize == -netPosition && pricesAreEqual(order.bid, price))
+                    {
+                        LogDebug(String.Format("desired buy order instrument={0} internal={1} number={2} already working, continuing", index, order.internalOrderNumber, order.orderNumber));
                         continue;
+                    }
 
                     if (price >= theoThreshold)
                     {
                         if (mOrders.orderInUse(order))
+                        {
+                            LogDebug(String.Format("cancelling working order instrument={0} internal={1} number={2}, price={3} >= theo_threshold={4}", index, order.internalOrderNumber, order.orderNumber, price, theoThreshold));
                             mOrders.CancelOrder(order);
+                        }
+                        else
+                        {
+                            LogDebug(String.Format("order for instrument={0} will not be submitted, price={1} >= theo_threshold={2}", index, price, theoThreshold));
+                        }
 
                         continue;
                     }

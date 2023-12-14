@@ -91,6 +91,8 @@ namespace StrategyRunner
         public static double bvTimeoutSeconds = -1;
         public static double bvMaxLoss = -1;
 
+        public static string logLevel = "info";
+
         public BV(API api, BVConfig config)
         {
             try
@@ -285,6 +287,11 @@ namespace StrategyRunner
             if (eurexThrottleVolume == -1)
                 return P.eurexThrottleVolume;
             return eurexThrottleVolume;
+        }
+
+        public override string GetLogLevel()
+        {
+            return logLevel;
         }
 
         private void Log(string message)
@@ -742,8 +749,8 @@ namespace StrategyRunner
                         field.SetValue(null, val);
                     }
                     break;
-                } //end else
-            } // end foreach
+                }
+            }
 
             return (valueChanged, ret);
         }

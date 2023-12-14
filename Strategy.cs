@@ -20,6 +20,8 @@ namespace StrategyRunner
         public abstract double GetMaxLossMarketHedge();
         public abstract double GetMaxLossLimitHedge();
 
+        public abstract string GetLogLevel();
+
         public int quoteIndex;
         public int farIndex;
         public int leanIndex;

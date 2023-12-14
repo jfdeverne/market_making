@@ -57,9 +57,9 @@ namespace StrategyRunner
         public static double quoteThrottleSeconds = -1;
         public static int quoteThrottleVolume = -1;
 
-        public List<VI> crossVenueInstruments;
-
         public static string logLevel = "info";
+
+        public List<VI> crossVenueInstruments;
 
         public Quoter(API api, QuoterConfig config)
         {
@@ -234,6 +234,11 @@ namespace StrategyRunner
             if (eurexThrottleVolume == -1)
                 return P.eurexThrottleVolume;
             return eurexThrottleVolume;
+        }
+
+        public override string GetLogLevel()
+        {
+            return logLevel;
         }
 
         public override void OnStatusChanged(int status)
@@ -855,8 +860,8 @@ namespace StrategyRunner
                         field.SetValue(null, val);
                     }
                     break;
-                } //end else
-            } // end foreach
+                }
+            }
 
             return (valueChanged, ret);
         }

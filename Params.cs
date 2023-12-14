@@ -114,8 +114,8 @@ namespace StrategyRunner
                         field.SetValue(null, val);
                     }
                     break;
-                } //end else
-            } // end foreach
+                }
+            }
             if (!found)
                 ret += "::UPDATEPARAMS ERR - Parameter " + paramName + " isn't defined in KG";
            
@@ -141,10 +141,10 @@ namespace StrategyRunner
                     return ret;
                 }
                 SetValue(parts[0].Trim(), parts[1].Trim());
-            } //end -for matchCollection
+            }
                      
             return ret;
 
-        }//end SetValues
+        }
     }
 }
