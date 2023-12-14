@@ -1,7 +1,6 @@
 ﻿using KGClasses;
 using StrategyLib;
 using System.Collections.Generic;
-using System.Net.NetworkInformation;
 
 namespace StrategyRunner
 {

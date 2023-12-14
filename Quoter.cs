@@ -5,9 +5,6 @@ using System.Collections.Generic;
 using KGClasses;
 using System.Reflection;
 using System.Xml;
-using System.Configuration;
-using System.Security.Cryptography;
-using System.Threading.Tasks;
 
 namespace StrategyRunner
 {

@@ -6,7 +6,6 @@ using System.Timers;
 using Detail;
 using System.Reflection;
 using System.Xml;
-using System.Security.Cryptography;
 
 namespace Detail
 {

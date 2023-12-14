@@ -1,9 +1,7 @@
 ﻿using Detail;
 using KGClasses;
-using StrategyLib;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 
 namespace Detail
 {

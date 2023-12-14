@@ -6,6 +6,8 @@ using System.Timers;
 using Detail;
 using System.Reflection;
 using System.Xml;
+using System.Security.Cryptography;
+using System.Diagnostics;
 
 namespace StrategyRunner
 {
@@ -69,9 +71,9 @@ namespace StrategyRunner
         public static double bfTriggerSeconds = -1;
         public static double bfTimeoutSeconds = -1;
 
-        
         public bool bf = false;
         public double bfPrice = -11;
+        public double entryPrice = -11;
 
         public LimitBV(API api, BVConfig config)
         {
@@ -425,6 +427,7 @@ namespace StrategyRunner
             pendingOrders[orderId] = n;
             return orderId;
         }
+
         private int Sell(int n, string source, int index, double price)
         {
             int orderId = orders.SendOrder(sell, index, Side.SELL, price, n, source);
@@ -439,7 +442,6 @@ namespace StrategyRunner
             else
                 return false || bf;
         }
-
         private bool isSellPreferred(double BVPrice)
         {
             if (BVPrice - API.GetImprovedCM(leanIndex) > boxTargetPrice + GetCreditOffset())
@@ -461,14 +463,22 @@ namespace StrategyRunner
 
         private void OnBfTimeout(object sender, ElapsedEventArgs e)
         {
-            bf = false;
-
-            for (int i = 0; i < numAllInstruments; i++)
+            try
             {
-                holding[i] += bfHolding[i];
-            }
+                bf = false;
 
-            hedging.Hedge();
+                for (int i = 0; i < numAllInstruments; i++)
+                {
+                    holding[i] += bfHolding[i];
+                    bfHolding[i] = 0;
+                }
+
+                hedging.Hedge();
+            }
+            catch (Exception ex)
+            {
+                Log(ex.Message);
+            }
         }
 
         private void OnHedgeTimeout(object sender, ElapsedEventArgs e)
@@ -533,6 +543,10 @@ namespace StrategyRunner
                     }
                     if (qty > 0)
                     {
+                        if (bf && limitBVBuyPrice > bfPrice + 1e-7)
+                        {
+                            return;
+                        }
                         ordId = orders.SendOrder(limitBuy, limitBVBuyIndex, Side.BUY, limitBVBuyPrice, qty, "LIMIT_BV");
                     }
                 }
@@ -575,14 +589,16 @@ namespace StrategyRunner
                     }
                     if (qty > 0)
                     {
+                        if (bf && limitBVBuyPrice > bfPrice + 1e-7)
+                        {
+                            return;
+                        }
                         ordId = orders.SendOrder(limitSell, limitBVSellIndex, Side.SELL, limitBVSellPrice, qty, "LIMIT_BV");
                     }
                 }
                 else
                     if (orders.orderInUse(limitSell))
                         orders.CancelOrder(limitSell);
-
-
 
                 //API.Log("<--SendLimitOrders");
             }
@@ -601,29 +617,46 @@ namespace StrategyRunner
                 orders.CancelOrder(limitSell);
         }
 
+        private bool shouldSellAtBid(double price, int instrumentIndex)
+        {
+            return pricesAreEqual(price, bids[instrumentIndex].price) && isSellPreferred(price) && !isBuyPreferred(price);
+        }
+        private bool shouldBuyAtAsk(double price, int instrumentIndex)
+        {
+            return pricesAreEqual(price, asks[instrumentIndex].price) && !isSellPreferred(price) && isBuyPreferred(price);
+        }
+
         private void BF(double price, int instrumentIndex)
         {
-            if (price == bids[instrumentIndex].price)
+            if (shouldSellAtBid(price, instrumentIndex))
             {
-                double theBVPrice = Math.Min(asks[farIndex].price, asks[quoteIndex].price);
-                if (!isSellPreferred(theBVPrice))
+                if (GetNetPosition() != 0 && entryPrice != price)
                 {
-                    orders.SendOrder(sell, instrumentIndex, Side.SELL, price, GetMaxCrossVolume(), "BF_INIT");
-                    bf = true;
-                    bfPrice = price;
-                    bfTimeout.Start();
+                    for (int i = 0; i < holding.Length; i++)
+                    {
+                        bfHolding[i] = holding[i];
+                        holding[i] = 0;
+                    }
                 }
+                orders.SendOrder(sell, instrumentIndex, Side.SELL, price, GetMaxCrossVolume() + GetNetPosition(), "BF_INIT");
+                bf = true;
+                bfPrice = price;
+                bfTimeout.Start();
             }
-            else if (price == asks[instrumentIndex].price)
+            else if (shouldBuyAtAsk(price, instrumentIndex))
             {
-                double theBVPrice = Math.Max(bids[farIndex].price, bids[quoteIndex].price);
-                if (!isBuyPreferred(theBVPrice))
+                if (GetNetPosition() != 0 && entryPrice != price)
                 {
-                    orders.SendOrder(buy, instrumentIndex, Side.BUY, price, GetMaxCrossVolume(), "BF_INIT");
-                    bf = true;
-                    bfPrice = price;
-                    bfTimeout.Start();
+                    for (int i = 0; i < holding.Length; i++)
+                    {
+                        bfHolding[i] = holding[i];
+                        holding[i] = 0;
+                    }
                 }
+                orders.SendOrder(buy, instrumentIndex, Side.BUY, price, GetMaxCrossVolume() + GetNetPosition(), "BF_INIT");
+                bf = true;
+                bfPrice = price;
+                bfTimeout.Start();
             }
         }
 
@@ -671,7 +704,7 @@ namespace StrategyRunner
                 }
 
                 if (!bf && bfTrigger)
-                    BF(bfPrice, instrumentIndex);
+                    BF(price, instrumentIndex);
 
                 SendLimitOrders();
                 CancelOnPriceMove(instrumentIndex);
@@ -756,6 +789,8 @@ namespace StrategyRunner
 
                 int instrumentIndex = deal.index + API.n * deal.VenueID;
 
+                int positionBefore = GetNetPosition();
+
                 if (deal.source != "BF_INIT")
                 {
                     holding[instrumentIndex] += amount;
@@ -770,11 +805,18 @@ namespace StrategyRunner
                     bfHolding[instrumentIndex] += amount;
                 }
 
+                int positionAfter = GetNetPosition();
+
+                if (positionBefore == 0 && positionAfter != 0)
+                {
+                    entryPrice = deal.price;
+                }
+
                 if (bf)
                 {
                     bfTimeout.Stop();
 
-                    if (deal.price == bfPrice)
+                    if (pricesAreEqual(deal.price, bfPrice))
                         bfTimeout.Start();
                     else
                         bf = false;

@@ -948,7 +948,7 @@ namespace StrategyRunner
                 else if (deal.stgID == -1)
                 {
                     API.Log("deal with unknown strategy, working around");
-                    for (int i = strategies.Count; i >= 0; i--)
+                    for (int i = strategies.Count-1; i >= 0; i--)
                     {
                         var strategy = strategies[i];
                         if (strategy.correlatedIndices.Contains(instrumentIndex) || strategy.crossVenueIndices.Contains(instrumentIndex))
