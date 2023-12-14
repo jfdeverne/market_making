@@ -357,7 +357,12 @@ namespace StrategyRunner
                         continue;
 
                     if (price <= theoThreshold)
+                    {
+                        if (mOrders.orderInUse(order))
+                            mOrders.CancelOrder(order);
+
                         continue;
+                    }
 
                     LimitPlusSell(netPosition, index);
                 }
@@ -391,7 +396,12 @@ namespace StrategyRunner
                         continue;
 
                     if (price >= theoThreshold)
+                    {
+                        if (mOrders.orderInUse(order))
+                            mOrders.CancelOrder(order);
+
                         continue;
+                    }
 
                     LimitPlusBuy(-netPosition, index);
                 }
