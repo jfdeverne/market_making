@@ -255,6 +255,7 @@ namespace StrategyRunner
     class StrategyRunner
     {
         int NBoxes;
+        int NOutrights;
         IMatrix V;
         IMatrix VVTInv;
         IMatrix VTVVTInv;
@@ -266,6 +267,7 @@ namespace StrategyRunner
         IMatrix outrightTargetPrices; //x = xICM + VTVVTInv*(y-V*xICM)
         Dictionary<int, double> outrightTargetPricesMap;
 
+        List<int> allOutrightIndices;
         IMatrix boxHoldings;
         List<int> quoteIndices;
         List<int> quoteFarIndices;
@@ -555,6 +557,7 @@ namespace StrategyRunner
 
                 var doc = XDocument.Load(pathQuoter);
 
+                allOutrightIndices = new List<int>();
                 quoteIndices = new List<int>();
                 quoteFarIndices = new List<int>();
                 leanIndices = new List<int>();
@@ -735,6 +738,10 @@ namespace StrategyRunner
                         boxIndices[1] = (combos.spreadList[0].sellLeg) % API.n;
                         boxIndices[2] = (leanCombos.spreadList[0].buyLeg) % API.n;
                         boxIndices[3] = (leanCombos.spreadList[0].sellLeg) % API.n;
+                        for (int i = 0; i <= 3; i++)
+                            if (!allOutrightIndices.Contains(boxIndices[i]))
+                                allOutrightIndices.Add(boxIndices[i]);
+
                         boxes.Add(new Box(boxIndices));
                         boxes[ii].targetPrice = API.GetBoxTargetPrice(s.stgID);
                         boxes[ii].linkedStgID = s.stgID;
@@ -744,24 +751,29 @@ namespace StrategyRunner
 
                 NBoxes = quoteIndices.Count;
                 boxHoldings = new Matrix(NBoxes, 1);
-                //boxIndices = new int[4]; //leg1, leg2 of 1st calendar spread, then leg1 and leg2 of the 2nd cal spread
-                outrightIndices = new int[2 * (NBoxes + 1)];
-                V = new Matrix(NBoxes, 2 * (NBoxes + 1));
-                beta = new Matrix(2 * (NBoxes + 1), 1);
+                //outrightIndices = new int[2 * (NBoxes + 1)];
+                NOutrights = allOutrightIndices.Count;
+                outrightIndices = new int[NOutrights];
+
+                V = new Matrix(NBoxes, NOutrights);
+                beta = new Matrix(NOutrights, 1);
                 boxTargetPrices = new Matrix(NBoxes, 1);
-                outrightICMs = new Matrix(2 * (NBoxes + 1), 1);
-                outrightTargetPrices = new Matrix(2 * (NBoxes + 1), 1);
+                outrightICMs = new Matrix(NOutrights, 1);
+                outrightTargetPrices = new Matrix(NOutrights, 1);
 
 
                 for (int i = 0; i < NBoxes; i++)
                 {
+
+                    Combo combos = API.GetCombos(quoteIndices[i]);
+                    Combo leanCombos = API.GetCombos(leanIndices[i]);
+
+                    //int placeInAllOutrights = allOutrightIndices.FindIndex(combos.spreadList[0].buyLeg % API.n);
                     V[i, i] = 1;
                     V[i, i + 1] = -1;
                     V[i, i + NBoxes + 1] = -1;
                     V[i, i + NBoxes + 2] = 1;
-                    Combo combos = API.GetCombos(quoteIndices[i]);
-                    Combo leanCombos = API.GetCombos(leanIndices[i]);
-                    
+
                     //WE PRESUME THAT i's sellLeg is (i+1)'s buyLeg:
                     if (i == 0)
                     {
