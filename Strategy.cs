@@ -16,11 +16,10 @@ namespace StrategyRunner
         public abstract void OnParamsUpdate(string paramName, string paramValue);
         public abstract void OnGlobalParamsUpdate();
         public abstract int GetNetPosition();
-
         public abstract double GetMaxLossMarketHedge();
         public abstract double GetMaxLossLimitHedge();
-
         public abstract string GetLogLevel();
+        public abstract int GetEusCandidatePosition();
 
         public int quoteIndex;
         public int farIndex;

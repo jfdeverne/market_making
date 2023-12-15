@@ -294,6 +294,11 @@ namespace StrategyRunner
             return logLevel;
         }
 
+        public override int GetEusCandidatePosition()
+        {
+            throw new NotImplementedException();
+        }
+
         private void Log(string message)
         {
             API.Log(String.Format("STG {0}: {1}", stgID, message));

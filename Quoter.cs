@@ -241,6 +241,11 @@ namespace StrategyRunner
             return logLevel;
         }
 
+        public override int GetEusCandidatePosition()
+        {
+            throw new NotImplementedException();
+        }
+
         public override void OnStatusChanged(int status)
         {
             if (status == 0)

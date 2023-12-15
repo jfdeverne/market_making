@@ -109,9 +109,11 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Base.cs" />
     <Compile Include="BV.cs" />
     <Compile Include="LimitBV.cs" />
     <Compile Include="Quoter.cs" />
+    <Compile Include="SpreadTrader.cs" />
     <Compile Include="Strategy.cs" />
     <Compile Include="Hedging.cs" />
     <Compile Include="Orders.cs" />

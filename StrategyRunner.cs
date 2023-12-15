@@ -667,6 +667,56 @@ namespace StrategyRunner
                     strategies[s.stgID] = s;
                 }
 
+                foreach (var bv in docBV.Descendants("SpreadTrader"))
+                {
+                    BVConfig config = new BVConfig
+                    (
+                        (string)bv.Element("nearInstrument"),
+                        (string)bv.Element("farInstrument"),
+                        (string)bv.Element("leanInstrument"),
+                        (int?)bv.Element("limitPlusSize"),
+                        (int?)bv.Element("nonLeanLimitPlusSize"),
+                        (double?)bv.Element("defaultBaseSpread")
+                    );
+
+                    foreach (var hedgeInstrument in bv.Elements("hedgeInstrument"))
+                    {
+                        if (hedgeInstrument.Attribute("class").Value == "correlated")
+                        {
+                            config.correlatedInstruments.Add((string)hedgeInstrument);
+                        }
+                        else if (hedgeInstrument.Attribute("class").Value == "crossVenue")
+                        {
+                            config.crossVenueInstruments.Add((string)hedgeInstrument);
+                        }
+                    }
+
+                    config.crossVenueInstruments.Add(config.nearInstrument);
+
+                    var leanEl = bv.Element("leanInstrument");
+                    if (leanEl.Attribute("class").Value == "correlated")
+                    {
+                        config.correlatedInstruments.Add(config.leanInstrument);
+                    }
+                    else if (leanEl.Attribute("class").Value == "crossVenue")
+                    {
+                        config.crossVenueInstruments.Add(config.leanInstrument);
+                    }
+
+                    var farEl = bv.Element("farInstrument");
+                    if (farEl.Attribute("class").Value == "correlated")
+                    {
+                        config.correlatedInstruments.Add(config.farInstrument);
+                    }
+                    else if (farEl.Attribute("class").Value == "crossVenue")
+                    {
+                        config.crossVenueInstruments.Add(config.farInstrument);
+                    }
+
+                    Strategy s = new SpreadTrader(API, config);
+                    strategies[s.stgID] = s;
+                }
+
                 foreach (var bv in docBV.Descendants("LimitBV"))
                 {
                     BVConfig config = new BVConfig

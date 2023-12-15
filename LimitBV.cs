@@ -326,6 +326,11 @@ namespace StrategyRunner
             return eurexThrottleVolume;
         }
 
+        public override int GetEusCandidatePosition()
+        {
+            throw new NotImplementedException();
+        }
+
         public override string GetLogLevel()
         {
             return logLevel;
@@ -639,34 +644,6 @@ namespace StrategyRunner
             }
         }
 
-        private void SpreadTrader(double targetSpread)
-        {
-            double bid = bids[quoteIndex].price - asks[leanIndex].price;
-            double ask = asks[quoteIndex].price - bids[leanIndex].price;
-            
-            double bidSize = asks[leanIndex].qty;
-            double askSize = bids[leanIndex].qty;
-
-            //TODO: implement non-hedging limitplus logic (?)
-            //design question: this can be as a special case of hedging where one instrument (or instrument on any venue forming an EUS?) is preferred over the others
-            //  until it's considered to have ran away in which case we revert to hedging as normal
-
-            //it can also be seen as separate from hedging in which case we probably want a working LimitPlus logic in Orders.cs or entirely separate,
-            //  and then once we give up due to a timeout or price/volume running away, we send it to hedging, like in other (limit)bv venutres
-
-
-            if (Math.Abs(targetSpread - bid) < 0.001 && bidSize > 1000)
-            {
-                //orders.SendOrder(sell, quoteIndex, Side.SELL, bids[quoteIndex].price, GetQuantity(), "SPREAD_TRADER");
-                //orders.SendLimitPlus(buy, leanIndex, Side.BUY, GetLimitPlusBuyPrice(), GetQuantity(), "SPREAD_TRADER");
-            }
-            else if (Math.Abs(targetSpread - ask) < 0.001 && askSize > 1000)
-            {
-                //orders.SendOrder(buy, quoteIndex, Side.BUY, asks[quoteIndex].price, GetQuantity(), "SPREAD_TRADER");
-                //orders.SendLimitPlus(sell, leanIndex, Side.SELL, GetLimitPlusSellPrice(), GetQuantity(), "SPREAD_TRADER");
-            }
-        }
-
         public override void OnProcessMD(VIT vit)
         {
             try
@@ -702,9 +679,6 @@ namespace StrategyRunner
                 orders.OnProcessMD();
                 orders.CheckPendingCancels();
                 hedging.CheckIOC();
-
-                //SpreadTrader();
-                //return;
 
                 if (GetNetPosition() != 0)
                 {

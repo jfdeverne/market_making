@@ -4,9 +4,10 @@ using StrategyLib;
 using System;
 using System.Collections.Generic;
 
+
 namespace StrategyRunner
 {
-    public class Hedging
+    public class Base
     {
         Strategy mStrategy;
 
@@ -18,7 +19,7 @@ namespace StrategyRunner
         List<int> mIOCs;
         List<int> mIOCCancels;
 
-        public Hedging(Strategy strategy)
+        public Base(Strategy strategy)
         {
             mStrategy = strategy;
 
@@ -26,16 +27,6 @@ namespace StrategyRunner
             sellOrders = new Dictionary<int, KGOrder>();
 
             foreach (var index in strategy.correlatedIndices)
-            {
-                KGOrder buyOrder = new KGOrder();
-                buyOrders[index] = buyOrder;
-                KGOrder sellOrder = new KGOrder();
-                sellOrders[index] = sellOrder;
-                mStrategy.strategyOrders.Add(buyOrder);
-                mStrategy.strategyOrders.Add(sellOrder);
-            }
-
-            foreach (var index in strategy.crossVenueIndices)
             {
                 KGOrder buyOrder = new KGOrder();
                 buyOrders[index] = buyOrder;
@@ -60,7 +51,7 @@ namespace StrategyRunner
         void LogDebug(string message)
         {
             if (mStrategy.GetLogLevel() == "debug")
-                mStrategy.API.Log(String.Format("STG {0}: [HEDGING] {1}", mStrategy.stgID, message));
+                mStrategy.API.Log(String.Format("STG {0}: [BASE_SPREADS] {1}", mStrategy.stgID, message));
         }
 
         double GetLimitPlusBuyPrice(int index)
@@ -82,19 +73,6 @@ namespace StrategyRunner
 
             if (quantity > 0)
             {
-                foreach (var index in mStrategy.crossVenueIndices)
-                {
-                    if (mStrategy.holding[index] + quantity < P.maxOutrights)
-                    {
-                        if ((mStrategy.asks[index].price < bestOffer) || ((mStrategy.asks[index].price == bestOffer) && (mStrategy.asks[index].qty > hedgerQty)))
-                        {
-                            bestOffer = mStrategy.asks[index].price;
-                            hedgeIndex = index;
-                            hedgerQty = mStrategy.asks[index].qty;
-                        }
-                    }
-                }
-
                 foreach (var index in mStrategy.correlatedIndices)
                 {
                     if (mStrategy.holding[index] + quantity < P.maxOutrights)
@@ -110,19 +88,6 @@ namespace StrategyRunner
             }
             else if (quantity < 0)
             {
-                foreach (var index in mStrategy.crossVenueIndices)
-                {
-                    if (mStrategy.holding[index] + quantity > -P.maxOutrights)
-                    {
-                        if ((mStrategy.bids[index].price > bestBid) || ((mStrategy.bids[index].price == bestBid) && (mStrategy.bids[index].qty > hedgerQty)))
-                        {
-                            bestBid = mStrategy.bids[index].price;
-                            hedgeIndex = index;
-                            hedgerQty = mStrategy.bids[index].qty;
-                        }
-                    }
-                }
-
                 foreach (var index in mStrategy.correlatedIndices)
                 {
                     if (mStrategy.holding[index] + quantity > -P.maxOutrights)
@@ -176,7 +141,7 @@ namespace StrategyRunner
 
             double price = GetLimitPlusBuyPrice(index);
 
-            int orderId = mOrders.SendOrder(order, index, Side.BUY, price, n, "HEDGE", true);
+            int orderId = mOrders.SendOrder(order, index, Side.BUY, price, n, "BASE_SPREADS", true);
 
             if (orderId == -1)
             {
@@ -190,7 +155,7 @@ namespace StrategyRunner
 
             double price = GetLimitPlusSellPrice(index);
 
-            int orderId = mOrders.SendOrder(order, index, Side.SELL, price, n, "HEDGE", true);
+            int orderId = mOrders.SendOrder(order, index, Side.SELL, price, n, "BASE_SPREADS", true);
 
             if (orderId == -1)
             {
@@ -202,14 +167,14 @@ namespace StrategyRunner
         private int Buy(int n, int index)
         {
             var order = buyOrders[index];
-            int orderId = mOrders.SendOrder(order, index, Side.BUY, mStrategy.asks[index].price, n, "HEDGE", true);
+            int orderId = mOrders.SendOrder(order, index, Side.BUY, mStrategy.asks[index].price, n, "BASE_SPREADS", true);
             return orderId;
         }
 
         private int Sell(int n, int index)
         {
             var order = sellOrders[index];
-            int orderId = mOrders.SendOrder(order, index, Side.SELL, mStrategy.bids[index].price, n, "HEDGE", true);
+            int orderId = mOrders.SendOrder(order, index, Side.SELL, mStrategy.bids[index].price, n, "BASE_SPREADS", true);
             return orderId;
         }
 
