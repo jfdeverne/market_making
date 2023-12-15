@@ -6,6 +6,8 @@ using System.Timers;
 using Detail;
 using System.Reflection;
 using System.Xml;
+using System.Text;
+using System.IO;
 
 namespace StrategyRunner
 {
@@ -36,6 +38,8 @@ namespace StrategyRunner
         Hedging hedging;
         Base baseSpreads;
 
+        StringBuilder csvContent;
+
         public static double bvThrottleSeconds = -1;
         public static int bvThrottleVolume = -1;
         public static double creditOffset = -1;
@@ -48,6 +52,8 @@ namespace StrategyRunner
         public static double bvTimeoutSeconds = -1;
 
         public static string logLevel = "info";
+
+        double quoteEntryPrice = 0.0;
 
         public SpreadTrader(API api, BVConfig config)
         {
@@ -157,6 +163,10 @@ namespace StrategyRunner
                 orders = new Orders(this);
                 hedging = new Hedging(this);
                 baseSpreads = new Base(this);
+
+                csvContent = new StringBuilder();
+
+                csvContent.AppendLine("trade,quote_bid,quote_ask,quote_bid_size,quote_ask_size,lean_bid,lean_ask,lean_bid_size,lean_ask_size,quote_theo,lean_theo,box_target_price");
 
                 API.Log("-->Start strategy:");
                 API.StartStrategy(ref stgID, strategyOrders, instruments, 0, 5);
@@ -315,6 +325,8 @@ namespace StrategyRunner
         public override void OnFlush()
         {
             UpdateConfig(boxTargetPrice, config.nearInstrument);
+
+            File.WriteAllText("spread_trader.csv", csvContent.ToString());
         }
 
         private void CancelStrategy(string reason)
@@ -369,12 +381,22 @@ namespace StrategyRunner
             if (bid >= boxTargetPrice && bidSize > 1000)
             {
                 orders.SendOrder(sell, quoteIndex, Side.SELL, bids[quoteIndex].price, quantity, "SPREAD_TRADER");
+                quoteEntryPrice = bids[quoteIndex].price;
                 //baseSpreads.Hedge();
+
+                csvContent.AppendLine($"quote,{bids[quoteIndex].price},{asks[quoteIndex].price},{bids[quoteIndex].qty},{asks[quoteIndex].qty}," +
+                    $"{bids[leanIndex].price},{asks[leanIndex].price},{bids[leanIndex].qty},{asks[leanIndex].qty}," +
+                    $"{API.GetImprovedCM(quoteIndex)},{API.GetImprovedCM(leanIndex)},{boxTargetPrice},-11");
             }
             else if (ask <= boxTargetPrice && askSize > 1000)
             {
                 orders.SendOrder(buy, quoteIndex, Side.BUY, asks[quoteIndex].price, quantity, "SPREAD_TRADER");
+                quoteEntryPrice = asks[quoteIndex].price;
                 //baseSpreads.Hedge();
+
+                csvContent.AppendLine($"quote,{bids[quoteIndex].price},{asks[quoteIndex].price},{bids[quoteIndex].qty},{asks[quoteIndex].qty}," +
+                    $"{bids[leanIndex].price},{asks[leanIndex].price},{bids[leanIndex].qty},{asks[leanIndex].qty}," +
+                    $"{API.GetImprovedCM(quoteIndex)},{API.GetImprovedCM(leanIndex)},{boxTargetPrice},-11");
             }
         }
 
@@ -436,6 +458,13 @@ namespace StrategyRunner
             {
                 if (deal.source == "FW")
                     return;
+
+                if (deal.source == "BASE_SPREADS")
+                {
+                    csvContent.AppendLine($"lean,{bids[quoteIndex].price},{asks[quoteIndex].price},{bids[quoteIndex].qty},{asks[quoteIndex].qty}," +
+                    $"{bids[leanIndex].price},{asks[leanIndex].price},{bids[leanIndex].qty},{asks[leanIndex].qty}," +
+                    $"{API.GetImprovedCM(quoteIndex)},{API.GetImprovedCM(leanIndex)},{boxTargetPrice},{quoteEntryPrice - deal.price}");
+                }
 
                 int amount = deal.isBuy ? deal.amount : -deal.amount;
                 int instrumentIndex = deal.index + API.n * deal.VenueID;
