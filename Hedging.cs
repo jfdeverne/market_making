@@ -120,6 +120,7 @@ namespace StrategyRunner
                         }
                     }
                 }
+                return (hedgeIndex, bestOffer);
             }
             else if (quantity < 0)
             {
@@ -148,9 +149,10 @@ namespace StrategyRunner
                         }
                     }
                 }
+                return (hedgeIndex, bestBid);
             }
 
-            return hedgeIndex;
+            return (-1, -11);
         }
 
         public void CheckIOC()
