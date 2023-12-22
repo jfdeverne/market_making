@@ -19,7 +19,7 @@ namespace Detail
 
 namespace StrategyRunner
 {
-    public class BVConfig
+    public class BVConfig : Config
     {
         public string nearInstrument;
         public string farInstrument;
@@ -76,22 +76,22 @@ namespace StrategyRunner
         Throttler.Throttler bvThrottler;
 
         Timer timeout;
-        bool shouldHedge = false;
+        bool shouldHedge = true;
 
         Hedging hedging;
 
         Dictionary<int, int> pendingTrades;
 
-        public static int bvThrottleSeconds = -1;
-        public static int bvThrottleVolume = -1;
-        public static double creditOffset = -1;
-        public static int maxCrossVolume = -1;
-        public static int maxOutrights = -1;
-        public static int bvMaxOutstandingOutrights = -1;
-        public static double bvTimeoutSeconds = -1;
-        public static double bvMaxLoss = -1;
+        public int bvThrottleSeconds = -1;
+        public int bvThrottleVolume = -1;
+        public double creditOffset = -1;
+        public int maxCrossVolume = -1;
+        public int maxOutrights = -1;
+        public int bvMaxOutstandingOutrights = -1;
+        public double bvTimeoutSeconds = -1;
+        public double bvMaxLoss = -1;
 
-        public static string logLevel = "info";
+        public string logLevel = "info";
 
         public BV(API api, BVConfig config)
         {
@@ -202,7 +202,7 @@ namespace StrategyRunner
                 hedging = new Hedging(this);
 
                 API.Log("-->Start strategy:");
-                API.StartStrategy(ref stgID, strategyOrders, instruments, 0, 5);
+                API.StartStrategy(ref stgID, strategyOrders, instruments, 1, 5);
 
                 API.Log("<--strategy");
             }
@@ -308,7 +308,7 @@ namespace StrategyRunner
             }
             if (status == 1)
             {
-                hedging.Hedge();
+                shouldHedge = true;
             }
         }
 
@@ -324,6 +324,11 @@ namespace StrategyRunner
                     API.CancelAllOrders(stgID);
                 }
             }
+        }
+
+        public override void ReloadConfig(Config c)
+        {
+
         }
 
         public static void UpdateConfig(double newBaseSpreadValue, string instrument)
@@ -417,15 +422,11 @@ namespace StrategyRunner
 
             API.Log(String.Format("STG {0}: HedgeLeftovers, position={1}", stgID, position));
 
-            if (position == 0)
-                return;
-
             foreach (var deal in pendingOrders)
             {
                 orders.CancelOrder(deal.Key);
             }
 
-            hedging.Hedge();
             shouldHedge = true;
         }
 
@@ -514,7 +515,7 @@ namespace StrategyRunner
                     return;
                 }
 
-                if (Math.Abs(holding[farIndex] + volume) > GetMaxOutrights() || Math.Abs(holding[quoteIndex] - volume) > GetMaxOutrights())
+                if (Math.Abs(holding[quoteIndex] + volume) > GetMaxOutrights() || Math.Abs(holding[farIndex] - volume) > GetMaxOutrights())
                 {
                     return;
                 }
@@ -546,6 +547,7 @@ namespace StrategyRunner
 
         public override void OnProcessMD(VIT vit)
         {
+            return; //todo restore
             try
             {
                 VI vi = new VI(vit.v, vit.i);
@@ -588,7 +590,7 @@ namespace StrategyRunner
 
         public override void OnParamsUpdate(string paramName, string paramValue)
         {
-            SetValue(paramName, paramValue);
+            SetValue(this, paramName, paramValue);
         }
 
         public override void OnGlobalParamsUpdate()
@@ -642,8 +644,6 @@ namespace StrategyRunner
             {
                 int instrumentIndex = deal.index + API.n * deal.VenueID;
 
-                API.Log(String.Format("STG {0}: OnDeal instrument={1} order_id={2} source={3}", stgID, instrumentIndex, deal.internalOrderNumber, deal.source));
-
                 if (deal.source == "FW")
                     return;
 
@@ -659,6 +659,8 @@ namespace StrategyRunner
                 int amount = deal.isBuy ? deal.amount : -deal.amount;
 
                 holding[instrumentIndex] += amount;
+
+                API.Log(String.Format("STG {0}: OnDeal instrument={1} order_id={2} source={3} amount={4} position={5}", stgID, instrumentIndex, deal.internalOrderNumber, deal.source, amount, GetNetPosition()));
 
                 if (deal.source == "HEDGE" || deal.source == "INTERNAL")
                 {
@@ -700,7 +702,7 @@ namespace StrategyRunner
             }
         }
 
-        public static (bool, string) SetValue(string paramName, string paramValue)
+        public static (bool, string) SetValue(object instance, string paramName, string paramValue)
         {
             string ret = "";
             bool found = false;
@@ -715,38 +717,38 @@ namespace StrategyRunner
                     if (field.FieldType == typeof(int))
                     {
                         int val = Int32.Parse(paramValue);
-                        valueChanged = val != (int)field.GetValue(null);
-                        field.SetValue(null, val);
+                        valueChanged = val != (int)field.GetValue(instance);
+                        field.SetValue(instance, val);
                     }
                     else if (field.FieldType == typeof(string))
                     {
-                        valueChanged = paramValue != (string)field.GetValue(null);
-                        field.SetValue(null, paramValue);
+                        valueChanged = paramValue != (string)field.GetValue(instance);
+                        field.SetValue(instance, paramValue);
                     }
                     else if (field.FieldType == typeof(double))
                     {
                         double val = Double.Parse(paramValue);
-                        valueChanged = val != (double)field.GetValue(null);
-                        field.SetValue(null, val);
+                        valueChanged = val != (double)field.GetValue(instance);
+                        field.SetValue(instance, val);
                     }
                     else if (field.FieldType == typeof(bool))
                     {
                         if (paramValue == "true")
                         {
-                            valueChanged = !(bool)field.GetValue(null);
-                            field.SetValue(null, true);
+                            valueChanged = !(bool)field.GetValue(instance);
+                            field.SetValue(instance, true);
                         }
                         else
                         {
-                            valueChanged = (bool)field.GetValue(null);
-                            field.SetValue(null, false);
+                            valueChanged = (bool)field.GetValue(instance);
+                            field.SetValue(instance, false);
                         }
                     }
                     else if (field.FieldType == typeof(long))
                     {
                         long val = long.Parse(paramValue);
-                        valueChanged = val != (long)field.GetValue(null);
-                        field.SetValue(null, val);
+                        valueChanged = val != (long)field.GetValue(instance);
+                        field.SetValue(instance, val);
                     }
                     break;
                 }

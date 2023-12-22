@@ -29,6 +29,8 @@ namespace StrategyRunner
         List<int> mIOCs;
         List<int> mIOCCancels;
 
+        bool isHedging = false;
+
         public Hedging(Strategy strategy)
         {
             mStrategy = strategy;
@@ -65,7 +67,7 @@ namespace StrategyRunner
         private void Log(string message)
         {
             mStrategy.API.Log(String.Format("STG {0}: {1}", mStrategy.stgID, message));
-            mStrategy.API.SendToRemote(message, KGConstants.EVENT_GENERAL_INFO);
+            //mStrategy.API.SendToRemote(message, KGConstants.EVENT_GENERAL_INFO);
         }
 
         void LogDebug(string message)
@@ -84,7 +86,7 @@ namespace StrategyRunner
             return mStrategy.bids[index].price + mStrategy.API.GetTickSize(index);
         }
 
-        private int GetHedgeInstrument(int quantity)
+        private (int, double) GetHedgeInstrument(int quantity)
         {
             int hedgeIndex = -1;
             double bestOffer = double.MaxValue;
@@ -187,6 +189,13 @@ namespace StrategyRunner
 
             double price = GetLimitPlusBuyPrice(index);
 
+            double icm = mStrategy.API.GetImprovedCM(index);
+
+            if (icm - price < 0.0025)
+            {
+
+            }
+
             int orderId = mOrders.SendOrder(order, index, Side.BUY, price, n, "HEDGE", true);
 
             if (orderId == -1)
@@ -210,17 +219,17 @@ namespace StrategyRunner
             }
         }
 
-        private int Buy(int n, int index)
+        private int Buy(int n, int index, double price)
         {
             var order = buyOrders[index];
-            int orderId = mOrders.SendOrder(order, index, Side.BUY, mStrategy.asks[index].price, n, "HEDGE", true);
+            int orderId = mOrders.SendOrder(order, index, Side.BUY, price, n, "HEDGE", true);
             return orderId;
         }
 
-        private int Sell(int n, int index)
+        private int Sell(int n, int index, double price)
         {
             var order = sellOrders[index];
-            int orderId = mOrders.SendOrder(order, index, Side.SELL, mStrategy.bids[index].price, n, "HEDGE", true);
+            int orderId = mOrders.SendOrder(order, index, Side.SELL, price, n, "HEDGE", true);
             return orderId;
         }
 
@@ -247,9 +256,11 @@ namespace StrategyRunner
             }
         }
 
-        public bool ShouldSellHedgeNow(int hedgeInstrument)
+        public bool ShouldSellHedgeNow((int, double) hedgeInstrumentAndPrice)
         {
-            double price = mStrategy.bids[hedgeInstrument].price;
+            int hedgeInstrument = hedgeInstrumentAndPrice.Item1;
+            double price = hedgeInstrumentAndPrice.Item2;
+
             int limitPlusSize = mStrategy.limitPlusSize;
             if (hedgeInstrument != mStrategy.leanIndex)
                 limitPlusSize = mStrategy.nonLeanLimitPlusSize;
@@ -274,9 +285,11 @@ namespace StrategyRunner
             return false;
         }
 
-        public bool ShouldBuyHedgeNow(int hedgeInstrument)
+        public bool ShouldBuyHedgeNow((int, double) hedgeInstrumentAndPrice)
         {
-            double price = mStrategy.asks[hedgeInstrument].price;
+            int hedgeInstrument = hedgeInstrumentAndPrice.Item1;
+            double price = hedgeInstrumentAndPrice.Item2;
+
             int limitPlusSize = mStrategy.limitPlusSize;
             if (hedgeInstrument != mStrategy.leanIndex)
                 limitPlusSize = mStrategy.nonLeanLimitPlusSize;
@@ -305,39 +318,169 @@ namespace StrategyRunner
         public bool TakeLimitPlus(int netPosition)
         {
             bool shouldHedgeNow = false;
-            int hedgeInstrument = GetHedgeInstrument(-netPosition);
+            (int, double) hedgeInstrumentAndPrice = GetHedgeInstrument(-netPosition);
 
             if (netPosition > 0)
-                shouldHedgeNow = ShouldSellHedgeNow(hedgeInstrument);
+                shouldHedgeNow = ShouldSellHedgeNow(hedgeInstrumentAndPrice);
             else if (netPosition < 0)
-                shouldHedgeNow = ShouldBuyHedgeNow(hedgeInstrument);
+                shouldHedgeNow = ShouldBuyHedgeNow(hedgeInstrumentAndPrice);
 
             if (shouldHedgeNow)
             {
-                CancelAllHedgeOrders(hedgeInstrument);
-                bool success = HedgeNow(-netPosition, hedgeInstrument);
+                CancelAllHedgeOrders(hedgeInstrumentAndPrice.Item1);
+                bool success = HedgeNow(-netPosition, hedgeInstrumentAndPrice);
                 return success;
             }
 
             return false;
         }
 
+        public (double, int) GetHedges(int position)
+        {
+            int frequency = 0;
+
+            if (position > 0)
+            {
+                double bestPrice = 11111;
+
+                foreach (var perInstrument in sellOrders)
+                {
+                    var index = perInstrument.Key;
+                    var order = perInstrument.Value;
+
+                    if (mOrders.orderInTransientState(order))
+                    {
+                        LogDebug(String.Format("GetHedges: skipping order for instrument={0} internal={1} number={2}: in transient state", index, order.internalOrderNumber, order.orderNumber));
+                        continue;
+                    }
+
+                    var price = GetLimitPlusSellPrice(index);
+
+                    if (mStrategy.correlatedIndices.Contains(index))
+                    {
+                        price += mStrategy.correlatedSpreadTargetPrice;
+                    }
+
+                    double theoThreshold = mStrategy.API.GetImprovedCM(index) - mStrategy.GetMaxLossLimitHedge();
+
+                    double hysteresisThreshold = theoThreshold - (mStrategy.GetMaxLossLimitHedge() / 2.0);
+
+                    if (mOrders.orderInUse(order) && order.ask <= hysteresisThreshold)
+                    {
+                        Log(String.Format("GetHedges: skipping order for instrument={0} internal={1} number={2}: ask={3} <= hysterisis_threshold={4}", index, order.internalOrderNumber, order.orderNumber, order.ask, hysteresisThreshold));
+                        continue;
+                    }
+
+                    if (!mOrders.orderInUse(order) && price <= theoThreshold)
+                    {
+                        LogDebug(String.Format("GetHedges: skipping order for instrument={0}: price={1} <= theo_threshold={2}", index, price, theoThreshold));
+                        continue;
+                    }
+
+                    if (price < bestPrice - 0.0026)
+                    {
+                        LogDebug(String.Format("GetHedges: instrument {0}: new best price {1}", index, price));
+                        frequency = 1;
+                        bestPrice = price;
+                    }
+                    else
+                    {
+                        LogDebug(String.Format("GetHedges: instrument {0}: frequency {1}", index, frequency));
+                        frequency++;
+                    }
+                }
+
+                return (bestPrice, frequency);
+            }
+            else if (position < 0)
+            {
+                double bestPrice = -11;
+
+                foreach (var perInstrument in buyOrders)
+                {
+                    var index = perInstrument.Key;
+                    var order = perInstrument.Value;
+
+                    if (mOrders.orderInTransientState(order))
+                    {
+                        LogDebug(String.Format("GetHedges: skipping order for instrument={0} internal={1} number={2}: in transient state", index, order.internalOrderNumber, order.orderNumber));
+                        continue;
+                    }
+
+                    var price = GetLimitPlusBuyPrice(index);
+
+                    if (mStrategy.correlatedIndices.Contains(index))
+                    {
+                        price += mStrategy.correlatedSpreadTargetPrice;
+                    }
+
+                    double theoThreshold = mStrategy.API.GetImprovedCM(index) + mStrategy.GetMaxLossLimitHedge();
+
+                    double hysteresisThreshold = theoThreshold + (mStrategy.GetMaxLossLimitHedge() / 2.0);
+
+                    if (mOrders.orderInUse(order) && order.bid >= hysteresisThreshold)
+                    {
+                        Log(String.Format("GetHedges: skipping order for instrument={0} internal={1} number={2}: ask={3} >= hysterisis_threshold={4}", index, order.internalOrderNumber, order.orderNumber, order.ask, hysteresisThreshold));
+                        continue;
+                    }
+
+                    if (!mOrders.orderInUse(order) && price >= theoThreshold)
+                    {
+                        LogDebug(String.Format("GetHedges: skipping order for instrument={0}: price={1} >= theo_threshold={2}", index, price, theoThreshold));
+                        continue;
+                    }
+
+                    if (price > bestPrice + 0.0026)
+                    {
+                        LogDebug(String.Format("GetHedges: instrument {0}: new best price {1}", index, price));
+                        frequency = 1;
+                        bestPrice = price;
+                    }
+                    else
+                    {
+                        LogDebug(String.Format("GetHedges: instrument {0}: frequency {1}", index, frequency));
+                        frequency++;
+                    }
+                }
+
+                return (bestPrice, frequency);
+            }
+
+            return (-11, 0);
+        }
+
         public void Hedge()
         {
+            if (isHedging)
+                return;
+            isHedging = true;
+
             int netPosition = mStrategy.GetNetPosition();
 
             if (netPosition == 0)
             {
                 CancelAllHedgeOrders();
+                isHedging = false;
                 return;
             }
 
             if (TakeLimitPlus(netPosition))
+            {
+                isHedging = false;
                 return;
+            }
+
+            (double bestPrice, int frequency) = GetHedges(netPosition);
+            if (frequency == 0)
+            {
+                Log("no viable hedge instruments");
+                isHedging = false;
+                return;
+            }
 
             if (netPosition > 0)
             {
-                LogDebug(String.Format("hedging position {0}", netPosition));
+                Log(String.Format("hedging position {0}", netPosition));
                 foreach (var perInstrument in sellOrders)
                 {
                     var index = perInstrument.Key;
@@ -356,41 +499,62 @@ namespace StrategyRunner
 
                     var price = GetLimitPlusSellPrice(index);
 
+                    var priceWithSpread = price;
+
+                    if (mStrategy.correlatedIndices.Contains(index))
+                    {
+                        priceWithSpread += mStrategy.correlatedSpreadTargetPrice;
+                    }
+
+                    int quantity = netPosition;
+
+                    if (priceWithSpread < bestPrice + 0.0026 && frequency > 1)
+                    {
+                        quantity = (int)(netPosition / (frequency * P.simultaneousHedgersTaperFactor));
+                        Log(String.Format("tapering simultaneous hedgers, position={0} frequency={1} factor={2} final_qty={3}", netPosition, frequency, P.simultaneousHedgersTaperFactor, quantity));
+                    }
+                    else
+                    {
+                        Log(String.Format("NOT tapering, frequency={0} is one or price_with_spread={1} >= best_price_adjusted={2}, factor={3}", frequency, priceWithSpread, bestPrice + 0.0026, P.simultaneousHedgersTaperFactor));
+                    }
+
+                    if (quantity == 0)
+                        quantity = 1;
+
                     double theoThreshold = mStrategy.API.GetImprovedCM(index) - mStrategy.GetMaxLossLimitHedge();
 
-                    if (mOrders.orderInUse(order) && order.ask <= theoThreshold - (mStrategy.GetMaxLossLimitHedge() / 2.0))
+                    double hysterisisThreshold = theoThreshold - (mStrategy.GetMaxLossLimitHedge() / 2.0);
+
+                    if (mOrders.orderInUse(order) && order.ask <= hysterisisThreshold)
                     {
-                        LogDebug(String.Format("cancelling order instrument={0} internal={1} number={2}: ask={3} <= threshold={4}+maxLossFactor", index, order.internalOrderNumber, order.orderNumber, order.ask, theoThreshold));
+                        Log(String.Format("cancelling order instrument={0} internal={1} number={2}: ask={3} <= hysterisis_threshold={4}", index, order.internalOrderNumber, order.orderNumber, order.ask, hysterisisThreshold));
                         mOrders.CancelOrder(order);
                         continue;
                     }
 
-                    if (order.askSize == netPosition && pricesAreEqual(order.ask, price))
+                    if (order.askSize == quantity && pricesAreEqual(order.ask, price))
                     {
                         LogDebug(String.Format("desired sell order instrument={0} internal={1} number={2} already working, continuing", index, order.internalOrderNumber, order.orderNumber));
+
+                        if (price <= theoThreshold)
+                        {
+                            Log(String.Format("working order instrument={0} internal={1} number={2}, price={3} <= theo_threshold={4} but not < hysterisis_threshold={5}, no action required", index, order.internalOrderNumber, order.orderNumber, price, theoThreshold, hysterisisThreshold));
+                        }
                         continue;
                     }
 
-                    if (price <= theoThreshold)
+                    if (!mOrders.orderInUse(order) && price <= theoThreshold)
                     {
-                        if (mOrders.orderInUse(order))
-                        {
-                            LogDebug(String.Format("cancelling working order instrument={0} internal={1} number={2}, price={3} <= theo_threshold={4}", index, order.internalOrderNumber, order.orderNumber, price, theoThreshold));
-                            mOrders.CancelOrder(order);
-                        }
-                        else
-                        {
-                            LogDebug(String.Format("order for instrument={0} will not be submitted, price={1} <= theo_threshold={2}", index, price, theoThreshold));
-                        }
+                        LogDebug(String.Format("order for instrument={0} will not be submitted, price={1} <= theo_threshold={2}", index, price, theoThreshold));
                         continue;
                     }
 
-                    LimitPlusSell(netPosition, index);
+                    LimitPlusSell(quantity, index);
                 }
             }
             else if (netPosition < 0)
             {
-                LogDebug(String.Format("hedging position {0}", netPosition));
+                Log(String.Format("hedging position {0}", netPosition));
                 foreach (var perInstrument in buyOrders)
                 {
                     var index = perInstrument.Key;
@@ -409,43 +573,66 @@ namespace StrategyRunner
 
                     var price = GetLimitPlusBuyPrice(index);
 
+                    var priceWithSpread = price;
+
+                    if (mStrategy.correlatedIndices.Contains(index))
+                    {
+                        priceWithSpread += mStrategy.correlatedSpreadTargetPrice;
+                    }
+
+                    int quantity = netPosition;
+
+                    if (priceWithSpread > bestPrice - 0.0026 && frequency > 1)
+                    {
+                        quantity = (int)(netPosition / (frequency * P.simultaneousHedgersTaperFactor));
+                        Log(String.Format("tapering simultaneous hedgers, position={0} frequency={1} factor={2} final_qty={3}", netPosition, frequency, P.simultaneousHedgersTaperFactor, quantity));
+                    }
+                    else
+                    {
+                        Log(String.Format("NOT tapering, frequency={0} is one or price_with_spread={1} <= best_price_adjusted={2}, factor={3}", frequency, priceWithSpread, bestPrice + 0.0026, P.simultaneousHedgersTaperFactor));
+                    }
+
+                    if (quantity == 0)
+                        quantity = 1;
+
                     double theoThreshold = mStrategy.API.GetImprovedCM(index) + mStrategy.GetMaxLossLimitHedge();
 
-                    if (mOrders.orderInUse(order) && order.bid >= theoThreshold + (mStrategy.GetMaxLossLimitHedge() / 2.0))
+                    double hysterisisThrehsold = theoThreshold + (mStrategy.GetMaxLossLimitHedge() / 2.0);
+
+                    if (mOrders.orderInUse(order) && order.bid >= hysterisisThrehsold)
                     {
-                        LogDebug(String.Format("cancelling order instrument={0} internal={1} number={2}: bid={3} >= threshold={4}+maxLossFactor", index, order.internalOrderNumber, order.orderNumber, order.bid, theoThreshold));
+                        Log(String.Format("cancelling order instrument={0} internal={1} number={2}: bid={3} >= hysterisis_threshold={4}", index, order.internalOrderNumber, order.orderNumber, order.bid, hysterisisThrehsold));
                         mOrders.CancelOrder(order);
                         continue;
                     }
 
-                    if (order.bidSize == -netPosition && pricesAreEqual(order.bid, price))
+                    if (order.bidSize == -quantity && pricesAreEqual(order.bid, price))
                     {
                         LogDebug(String.Format("desired buy order instrument={0} internal={1} number={2} already working, continuing", index, order.internalOrderNumber, order.orderNumber));
+
+                        if (price >= theoThreshold)
+                        {
+                            Log(String.Format("working order instrument={0} internal={1} number={2}, price={3} >= theo_threshold={4} but not > hysteririsis_threshold={5}, no action required", index, order.internalOrderNumber, order.orderNumber, price, theoThreshold, hysterisisThrehsold));
+                        }
                         continue;
                     }
 
-                    if (price >= theoThreshold)
+                    if (!mOrders.orderInUse(order) && price >= theoThreshold)
                     {
-                        if (mOrders.orderInUse(order))
-                        {
-                            LogDebug(String.Format("cancelling working order instrument={0} internal={1} number={2}, price={3} >= theo_threshold={4}", index, order.internalOrderNumber, order.orderNumber, price, theoThreshold));
-                            mOrders.CancelOrder(order);
-                        }
-                        else
-                        {
-                            LogDebug(String.Format("order for instrument={0} will not be submitted, price={1} >= theo_threshold={2}", index, price, theoThreshold));
-                        }
-
+                        LogDebug(String.Format("order for instrument={0} will not be submitted, price={1} >= theo_threshold={2}", index, price, theoThreshold));
                         continue;
                     }
 
-                    LimitPlusBuy(-netPosition, index);
+                    LimitPlusBuy(-quantity, index);
                 }
             }
+            isHedging = false;
         }
-
-        public bool HedgeNow(int quantity, int hedgeInstrument)
+        public bool HedgeNow(int quantity, (int, double) hedgeInstrumentAndPrice)
         {
+            int hedgeInstrument = hedgeInstrumentAndPrice.Item1;
+            double price = hedgeInstrumentAndPrice.Item2;
+
             if (quantity == 0)
             {
                 return true;
@@ -453,7 +640,7 @@ namespace StrategyRunner
 
             if (quantity < 0)
             {
-                int orderId = Sell(-quantity, hedgeInstrument);
+                int orderId = Sell(-quantity, hedgeInstrument, price);
                 if (orderId == -1)
                 {
                     return true;
@@ -463,7 +650,7 @@ namespace StrategyRunner
             }
             else if (quantity > 0)
             {
-                int orderId = Buy(quantity, hedgeInstrument);
+                int orderId = Buy(quantity, hedgeInstrument, price);
                 if (orderId == -1)
                 {
                     return true;

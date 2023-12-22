@@ -5,10 +5,11 @@ using System.Collections.Generic;
 using KGClasses;
 using System.Reflection;
 using System.Xml;
+using System.ComponentModel;
 
 namespace StrategyRunner
 {
-    public class QuoterConfig
+    public class QuoterConfig : Config
     {
         public double width { get; set; }
         public int size { get; set; }
@@ -52,12 +53,12 @@ namespace StrategyRunner
 
         Throttler.Throttler throttler;
 
-        public static double joinFactor = -1;
-        public static double joinFactorAllVenues = -1;
-        public static double quoteThrottleSeconds = -1;
-        public static int quoteThrottleVolume = -1;
+        public double joinFactor = -1;
+        public double joinFactorAllVenues = -1;
+        public double quoteThrottleSeconds = -1;
+        public int quoteThrottleVolume = -1;
 
-        public static string logLevel = "info";
+        public string logLevel = "info";
 
         public List<VI> crossVenueInstruments;
 
@@ -165,7 +166,7 @@ namespace StrategyRunner
                 throttler = new Throttler.Throttler(GetQuoteThrottleVolume(), t);
 
                 API.Log("-->Start strategy:");
-                API.StartStrategy(ref stgID, strategyOrders, instruments, 0, 4);
+                API.StartStrategy(ref stgID, strategyOrders, instruments, 1, 4);
 
                 API.Log("<--strategy");
             }
@@ -292,6 +293,11 @@ namespace StrategyRunner
             {
                 API.Log("OnRequest2UpdateParams exception: " + e.ToString() + ", " + e.StackTrace, true);
             }
+        }
+
+        public override void ReloadConfig(Config c)
+        {
+
         }
 
         public static void UpdateConfig(double newBaseSpreadValue, string instrument)
@@ -521,6 +527,7 @@ namespace StrategyRunner
 
         public override void OnProcessMD(VIT vit)
         {
+            return; //todo restore
             try
             {
                 orders.OnProcessMD();
@@ -766,7 +773,8 @@ namespace StrategyRunner
 
         public override void OnParamsUpdate(string paramName, string paramValue)
         {
-            SetValue(paramName, paramValue);
+            API.Log(String.Format("STG {0}: setting param={1} value={2}", stgID, paramName, paramValue));
+            SetValue(this, paramName, paramValue);
         }
 
         public override void OnGlobalParamsUpdate()
@@ -793,6 +801,8 @@ namespace StrategyRunner
 
                 holding[instrumentIndex] += amount;
 
+                API.Log(String.Format("STG {0}: OnDeal instrument={1} order_id={2} source={3} amount={4} position={5}", stgID, instrumentIndex, deal.internalOrderNumber, deal.source, amount, GetNetPosition()));
+
                 hedging.Hedge();
             }
             catch (Exception e)
@@ -811,12 +821,12 @@ namespace StrategyRunner
             API.Log(String.Format("OnOrder: int={0} status={1} sec={2} stg={3} ask_size={4} bid_size={5}", ord.internalOrderNumber, ord.orderStatus, ord.securityNumber, ord.stgID, ord.askSize, ord.bidSize));
         }
 
-        public static (bool, string) SetValue(string paramName, string paramValue)
+        public static (bool, string) SetValue(object instance, string paramName, string paramValue)
         {
             string ret = "";
             bool found = false;
             bool valueChanged = false;
-            foreach (FieldInfo field in typeof(Quoter).GetFields())
+            foreach (FieldInfo field in instance.GetType().GetFields())
             {
                 if (field.Name != paramName)
                     continue;
@@ -826,38 +836,38 @@ namespace StrategyRunner
                     if (field.FieldType == typeof(int))
                     {
                         int val = Int32.Parse(paramValue);
-                        valueChanged = val != (int)field.GetValue(null);
-                        field.SetValue(null, val);
+                        valueChanged = val != (int)field.GetValue(instance);
+                        field.SetValue(instance, val);
                     }
                     else if (field.FieldType == typeof(string))
                     {
-                        valueChanged = paramValue != (string)field.GetValue(null);
-                        field.SetValue(null, paramValue);
+                        valueChanged = paramValue != (string)field.GetValue(instance);
+                        field.SetValue(instance, paramValue);
                     }
                     else if (field.FieldType == typeof(double))
                     {
                         double val = Double.Parse(paramValue);
-                        valueChanged = val != (double)field.GetValue(null);
-                        field.SetValue(null, val);
+                        valueChanged = val != (double)field.GetValue(instance);
+                        field.SetValue(instance, val);
                     }
                     else if (field.FieldType == typeof(bool))
                     {
                         if (paramValue == "true")
                         {
-                            valueChanged = !(bool)field.GetValue(null);
-                            field.SetValue(null, true);
+                            valueChanged = !(bool)field.GetValue(instance);
+                            field.SetValue(instance, true);
                         }
                         else
                         {
-                            valueChanged = (bool)field.GetValue(null);
-                            field.SetValue(null, false);
+                            valueChanged = (bool)field.GetValue(instance);
+                            field.SetValue(instance, false);
                         }
                     }
                     else if (field.FieldType == typeof(long))
                     {
                         long val = long.Parse(paramValue);
-                        valueChanged = val != (long)field.GetValue(null);
-                        field.SetValue(null, val);
+                        valueChanged = val != (long)field.GetValue(instance);
+                        field.SetValue(instance, val);
                     }
                     break;
                 }

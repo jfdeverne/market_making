@@ -6,7 +6,6 @@ using System.Timers;
 using Detail;
 using System.Reflection;
 using System.Xml;
-using System.Security.Cryptography;
 using System.Diagnostics;
 
 namespace StrategyRunner
@@ -47,30 +46,28 @@ namespace StrategyRunner
         Timer bfTimeout;
 
         Timer hedgeTimeout;
-        bool shouldHedge = false;
+        bool shouldHedge = true;
 
         Hedging hedging;
 
-        Dictionary<int, int> pendingTrades;
+        public double bvThrottleSeconds = -1;
+        public int bvThrottleVolume = -1;
+        public double creditOffset = -1;
+        public int maxCrossVolume = -1;
+        public int maxOutrights = -1;
+        public int maxPosNear = -1;
+        public int minPosNear = -1;
+        public int maxPosFar = -1;
+        public int minPosFar = -1;
+        public double bvTimeoutSeconds = -1;
+        public double bvMaxLoss = -1;
 
-        public static double bvThrottleSeconds = -1;
-        public static int bvThrottleVolume = -1;
-        public static double creditOffset = -1;
-        public static int maxCrossVolume = -1;
-        public static int maxOutrights = -1;
-        public static int maxPosNear = -1;
-        public static int minPosNear = -1;
-        public static int maxPosFar = -1;
-        public static int minPosFar = -1;
-        public static double bvTimeoutSeconds = -1;
-        public static double bvMaxLoss = -1;
+        public int bfTriggerVolume = -1;
+        public int bfTriggerTradeCount = -1;
+        public double bfTriggerSeconds = -1;
+        public double bfTimeoutSeconds = -1;
 
-        public static int bfTriggerVolume = -1;
-        public static int bfTriggerTradeCount = -1;
-        public static double bfTriggerSeconds = -1;
-        public static double bfTimeoutSeconds = -1;
-
-        public static string logLevel = "info";
+        public string logLevel = "info";
 
         public bool bf = false;
         public double bfPrice = -11;
@@ -184,7 +181,6 @@ namespace StrategyRunner
                 hedgeTimeout.Elapsed += OnHedgeTimeout;
                 hedgeTimeout.AutoReset = false;
 
-                pendingTrades = new Dictionary<int, int>();
                 pendingResubmissions = new Dictionary<int, int>();
 
                 double ms = GetEurexThrottleSeconds() * 1000;
@@ -337,6 +333,12 @@ namespace StrategyRunner
             API.SendToRemote(message, KGConstants.EVENT_GENERAL_INFO);
         }
 
+        void LogDebug(string message)
+        {
+            if (GetLogLevel() == "debug")
+                API.Log(String.Format("STG {0}: [LIMIT_BV] {1}", stgID, message));
+        }
+
         public override void OnStatusChanged(int status)
         {
             if (status == 0)
@@ -345,7 +347,7 @@ namespace StrategyRunner
             }
             if (status == 1)
             {
-                hedging.Hedge();
+                shouldHedge = true;
             }
         }
 
@@ -361,6 +363,11 @@ namespace StrategyRunner
                     API.CancelAllOrders(stgID);
                 }
             }
+        }
+
+        public override void ReloadConfig(Config c)
+        {
+
         }
 
         public void UpdateConfig(double newBaseSpreadValue, string instrument)
@@ -449,23 +456,32 @@ namespace StrategyRunner
                 orders.CancelOrder(deal.Key);
             }
 
-            hedging.Hedge();
             shouldHedge = true;
+        }
+
+        private int OnBFFinished()
+        {
+            bf = false;
+
+            int positionTransferred = 0;
+            for (int i = 0; i < numAllInstruments; i++)
+            {
+                holding[i] += bfHolding[i];
+                positionTransferred += bfHolding[i];
+                bfHolding[i] = 0;
+            }
+
+            shouldHedge = true;
+
+            return positionTransferred;
         }
 
         private void OnBfTimeout(object sender, ElapsedEventArgs e)
         {
             try
             {
-                bf = false;
-
-                for (int i = 0; i < numAllInstruments; i++)
-                {
-                    holding[i] += bfHolding[i];
-                    bfHolding[i] = 0;
-                }
-
-                hedging.Hedge();
+                int positionTransferred = OnBFFinished();
+                Log(String.Format("BF finished, reason: timeout. BF position={0} transferred", positionTransferred));
             }
             catch (Exception ex)
             {
@@ -478,7 +494,6 @@ namespace StrategyRunner
             try
             {
                 HedgeLeftovers();
-                pendingTrades.Clear();
             }
             catch (Exception ex)
             {
@@ -591,9 +606,15 @@ namespace StrategyRunner
         private void CancelOnPriceMove(int instrumentIndex)
         {
             if ((!pricesAreEqual(limitBVBuyPrice, Math.Max(bids[quoteIndex].price, bids[farIndex].price))) && (orders.orderInUse(limitBuy)))
+            {
+                LogDebug(String.Format("CancelOnPriceMove limitBuy, instrument={0}", instrumentIndex));
                 orders.CancelOrder(limitBuy);
+            }
             else if ((!pricesAreEqual(limitBVSellPrice, Math.Min(asks[quoteIndex].price, asks[farIndex].price))) && (orders.orderInUse(limitSell)))
+            {
+                LogDebug(String.Format("CancelOnPriceMove limitSell, instrument={0}", instrumentIndex));
                 orders.CancelOrder(limitSell);
+            }
         }
 
         private bool shouldSellAtBid(double price, int instrumentIndex)
@@ -607,6 +628,8 @@ namespace StrategyRunner
 
         private void BF(double price, int instrumentIndex)
         {
+            //TODO: on bf timeout, cancel the bf_init order if still active
+
             if (shouldSellAtBid(price, instrumentIndex))
             {
                 if (GetNetPosition() != 0 && entryPrice != price)
@@ -617,7 +640,9 @@ namespace StrategyRunner
                         holding[i] = 0;
                     }
                 }
-                orders.SendOrder(sell, instrumentIndex, Side.SELL, price, GetMaxCrossVolume() + GetNetPosition(), "BF_INIT");
+                var quantity = GetMaxCrossVolume() + GetNetPosition();
+                Log(String.Format("BF_INIT SELL instrument={0} price={1} quantity={2}", instrumentIndex, price, quantity));
+                orders.SendOrder(sell, instrumentIndex, Side.SELL, price, quantity, "BF_INIT");
                 bf = true;
                 bfPrice = price;
                 bfTimeout.Start();
@@ -632,7 +657,9 @@ namespace StrategyRunner
                         holding[i] = 0;
                     }
                 }
-                orders.SendOrder(buy, instrumentIndex, Side.BUY, price, GetMaxCrossVolume() + GetNetPosition(), "BF_INIT");
+                var quantity = GetMaxCrossVolume() + GetNetPosition();
+                Log(String.Format("BF_INIT BUY instrument={0} price={1} quantity={2}", instrumentIndex, price, quantity));
+                orders.SendOrder(buy, instrumentIndex, Side.BUY, price, quantity, "BF_INIT");
                 bf = true;
                 bfPrice = price;
                 bfTimeout.Start();
@@ -659,6 +686,16 @@ namespace StrategyRunner
                     int lastTradeVolume = currentVolume - previousVolume;
                     price = API.GetLast(vi).price;
                     bfTrigger = bfDetector.addTrade(lastTradeVolume, price);
+
+                    if (bf)
+                    {
+                        if (!pricesAreEqual(price, bfPrice))
+                        {
+                            bfTimeout.Stop();
+                            int positionTransferred = OnBFFinished();
+                            Log(String.Format("BF finished, reason: market deal with price={0} different from bf_price={1}. BF position={2} transferred", price, bfPrice, positionTransferred));
+                        }
+                    }
                 }
 
                 if (!API.PassedTradeStart())
@@ -683,7 +720,9 @@ namespace StrategyRunner
                 }
 
                 if (!bf && bfTrigger)
+                {
                     BF(price, instrumentIndex);
+                }
 
                 SendLimitOrders();
                 CancelOnPriceMove(instrumentIndex);
@@ -696,7 +735,7 @@ namespace StrategyRunner
 
         public override void OnParamsUpdate(string paramName, string paramValue)
         {
-            SetValue(paramName, paramValue);
+            SetValue(this, paramName, paramValue);
         }
 
         public override void OnGlobalParamsUpdate()
@@ -786,6 +825,8 @@ namespace StrategyRunner
 
                 int positionAfter = GetNetPosition();
 
+                API.Log(String.Format("STG {0}: OnDeal instrument={1} order_id={2} source={3} amount={4} position={5}", stgID, instrumentIndex, deal.internalOrderNumber, deal.source, amount, positionAfter));
+
                 if (positionBefore == 0 && positionAfter != 0)
                 {
                     entryPrice = deal.price;
@@ -796,9 +837,14 @@ namespace StrategyRunner
                     bfTimeout.Stop();
 
                     if (pricesAreEqual(deal.price, bfPrice))
+                    {
                         bfTimeout.Start();
+                    }
                     else
-                        bf = false;
+                    {
+                        int positionTransferred = OnBFFinished();
+                        Log(String.Format("BF finished, reason: deal with price={0} different from bf_price={1}. BF position={2} transferred", deal.price, bfPrice, positionTransferred));
+                    }
                 }
 
                 if (deal.source != "LIMIT_BV")
@@ -837,12 +883,12 @@ namespace StrategyRunner
             }
         }
 
-        public static (bool, string) SetValue(string paramName, string paramValue)
+        public static (bool, string) SetValue(object instance, string paramName, string paramValue)
         {
             string ret = "";
             bool found = false;
             bool valueChanged = false;
-            foreach (FieldInfo field in typeof(BV).GetFields())
+            foreach (FieldInfo field in instance.GetType().GetFields())
             {
                 if (field.Name != paramName)
                     continue;
@@ -852,38 +898,38 @@ namespace StrategyRunner
                     if (field.FieldType == typeof(int))
                     {
                         int val = Int32.Parse(paramValue);
-                        valueChanged = val != (int)field.GetValue(null);
-                        field.SetValue(null, val);
+                        valueChanged = val != (int)field.GetValue(instance);
+                        field.SetValue(instance, val);
                     }
                     else if (field.FieldType == typeof(string))
                     {
-                        valueChanged = paramValue != (string)field.GetValue(null);
-                        field.SetValue(null, paramValue);
+                        valueChanged = paramValue != (string)field.GetValue(instance);
+                        field.SetValue(instance, paramValue);
                     }
                     else if (field.FieldType == typeof(double))
                     {
                         double val = Double.Parse(paramValue);
-                        valueChanged = val != (double)field.GetValue(null);
-                        field.SetValue(null, val);
+                        valueChanged = val != (double)field.GetValue(instance);
+                        field.SetValue(instance, val);
                     }
                     else if (field.FieldType == typeof(bool))
                     {
                         if (paramValue == "true")
                         {
-                            valueChanged = !(bool)field.GetValue(null);
-                            field.SetValue(null, true);
+                            valueChanged = !(bool)field.GetValue(instance);
+                            field.SetValue(instance, true);
                         }
                         else
                         {
-                            valueChanged = (bool)field.GetValue(null);
-                            field.SetValue(null, false);
+                            valueChanged = (bool)field.GetValue(instance);
+                            field.SetValue(instance, false);
                         }
                     }
                     else if (field.FieldType == typeof(long))
                     {
                         long val = long.Parse(paramValue);
-                        valueChanged = val != (long)field.GetValue(null);
-                        field.SetValue(null, val);
+                        valueChanged = val != (long)field.GetValue(instance);
+                        field.SetValue(instance, val);
                     }
                     break;
                 }

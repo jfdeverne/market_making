@@ -101,7 +101,7 @@ namespace StrategyRunner
                 return -1;
             }
 
-            mStrategy.API.Log(String.Format("[ORDERS] STG {0}: PopulateOrder instrument={1} side={2} price={3} amount={4} source={5}", mStrategy.stgID, instrument, side, price, amount, source));
+            mStrategy.API.Log(String.Format("[ORDERS] STG {0}: PopulateOrder instrument={1} side={2} price={3} amount={4} source={5} status={6}", mStrategy.stgID, instrument, side, price, amount, source, ord.orderStatus));
 
             bool ret = mStrategy.API.PopulateOrder(ord, instrument, isBuy, price, amount, false);
             if (!ret)
@@ -122,7 +122,7 @@ namespace StrategyRunner
 
             mStrategy.API.PostOrder(ord, mStrategy.stgID);
 
-            mStrategy.API.Log(String.Format("[ORDERS] STG {0}: SendOrder instrument={1} side={2} price={3} amount={4} source={5} id={6}", mStrategy.stgID, instrument, side, price, amount, source, ord.internalOrderNumber));
+            mStrategy.API.Log(String.Format("[ORDERS] STG {0}: SendOrder instrument={1} side={2} price={3} amount={4} source={5} id={6} status={7}", mStrategy.stgID, instrument, side, price, amount, source, ord.internalOrderNumber, ord.orderStatus));
 
             return ord.internalOrderNumber;
         }

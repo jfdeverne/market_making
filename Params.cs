@@ -1,19 +1,20 @@
 ﻿using System;
 using System.Text.RegularExpressions;
 using System.Reflection;
+using System.Net.NetworkInformation;
 
 namespace StrategyRunner
 {
     public static class P
     {
-        public static double targetPriceDriftFactor = 0.9999;
+        public static double targetPriceDriftFactor = 1;
         public static int maxTradeSize = 0;
 
         public static int maxOutrights = 0;
-        public static int maxPosNear = -150; //BY DEFINING IT TO BE NEGATIVE WE ENSURE WE WILL BUY AT LEAST 150 FAR BEFORE CONSIDER SELLING
-        public static int minPosNear = -250;
-        public static int maxPosFar = 250;
-        public static int minPosFar = 150;
+        public static int maxPosNear = 150; //BY DEFINING IT TO BE NEGATIVE WE ENSURE WE WILL BUY AT LEAST 150 FAR BEFORE CONSIDER SELLING
+        public static int minPosNear = -150;
+        public static int maxPosFar = 150;
+        public static int minPosFar = -150;
 
         public static double joinFactor = 1;
         public static double joinFactorAllVenues = 5;
@@ -54,6 +55,7 @@ namespace StrategyRunner
         public static double bfTimeoutSeconds = 30;
 
         public static string logLevel = "info";
+        public static double simultaneousHedgersTaperFactor = 0.7;
 
         public static string GetParamsStr()
         {

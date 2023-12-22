@@ -4,6 +4,10 @@ using System.Collections.Generic;
 
 namespace StrategyRunner
 {
+    public abstract class Config
+    {
+
+    }
     public abstract class Strategy
     {
         public abstract void OnSystemTradingMode(ref char c);
@@ -21,6 +25,7 @@ namespace StrategyRunner
         public abstract double GetMaxLossLimitHedge();
 
         public abstract string GetLogLevel();
+        public abstract void ReloadConfig(Config c);
 
         public int quoteIndex;
         public int farIndex;
@@ -56,6 +61,8 @@ namespace StrategyRunner
 
         public static double eurexThrottleSeconds = -1;
         public static int eurexThrottleVolume = -1;
+
+        public static double simultaneousHedgersTaperFactor = -1;
 
         public Throttler.EurexThrottler eurexThrottler;
     }

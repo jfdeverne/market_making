@@ -261,13 +261,14 @@ namespace StrategyRunner
         IMatrix VTVVTInv;
         IMatrix beta;
         int[] boxIndices;
-        int[] outrightIndices;
+        //int[] outrightIndices;
+        List<int> outrightIndices;
         IMatrix boxTargetPrices; //y
         IMatrix outrightICMs; //xICM
         IMatrix outrightTargetPrices; //x = xICM + VTVVTInv*(y-V*xICM)
         Dictionary<int, double> outrightTargetPricesMap;
+        Dictionary<int, int> outrightGlobal2LocalMap;
 
-        List<int> allOutrightIndices;
         IMatrix boxHoldings;
         List<int> quoteIndices;
         List<int> quoteFarIndices;
@@ -305,6 +306,8 @@ namespace StrategyRunner
 
             strategies = new Dictionary<int, Strategy>();
             outrightTargetPricesMap = new Dictionary<int, double>();
+            outrightGlobal2LocalMap = new Dictionary<int, int>();
+
             //setConsoleWindowVisibility(false, Console.Title);
             AppDomain.CurrentDomain.UnhandledException += new UnhandledExceptionEventHandler(GenericErrorHandler);
 
@@ -544,8 +547,332 @@ namespace StrategyRunner
             }
         }
 
+        private void OnParamsUpdate()
+        {
+            try
+            {
+                string pathQuoter = Directory.GetCurrentDirectory() + "/quoter.xml";
+
+                var doc = XDocument.Load(pathQuoter);
+
+                outrightIndices = new List<int>();
+                quoteIndices = new List<int>();
+                quoteFarIndices = new List<int>();
+                leanIndices = new List<int>();
+                boxes = new List<Box>();
+
+                int ii = 0;
+                int jj = 0;
+
+                foreach (var quoter in doc.Descendants("Quoter"))
+                {
+                    QuoterConfig config = new QuoterConfig
+                    {
+                        width = (double)quoter.Element("width"),
+                        size = (int)quoter.Element("size"),
+                        leanInstrument = (string)quoter.Element("leanInstrument"),
+                        quoteInstrument = (string)quoter.Element("quoteInstrument"),
+                        icsInstrument = (string)quoter.Element("ics"),
+                        asymmetricQuoting = (bool?)quoter.Element("asymmetricQuoting"),
+                        defaultBaseSpread = (double?)quoter.Element("defaultBaseSpread"),
+                        limitPlusSize = (int?)quoter.Element("limitPlusSize"),
+                        nonLeanLimitPlusSize = (int?)quoter.Element("nonLeanLimitPlusSize"),
+                        crossVenueInstruments = new List<string>(),
+                        correlatedInstruments = new List<string>()
+                    };
+
+                    foreach (var hedgeInstrument in quoter.Elements("hedgeInstrument"))
+                    {
+                        if (hedgeInstrument.Attribute("class").Value == "correlated")
+                        {
+                            config.correlatedInstruments.Add((string)hedgeInstrument);
+                        }
+                        else if (hedgeInstrument.Attribute("class").Value == "crossVenue")
+                        {
+                            config.crossVenueInstruments.Add((string)hedgeInstrument);
+                        }
+                    }
+
+                    config.crossVenueInstruments.Add(config.quoteInstrument);
+
+                    var leanEl = quoter.Element("leanInstrument");
+                    if (leanEl.Attribute("class").Value == "correlated")
+                    {
+                        config.correlatedInstruments.Add(config.leanInstrument);
+                    }
+                    else if (leanEl.Attribute("class").Value == "crossVenue")
+                    {
+                        config.crossVenueInstruments.Add(config.leanInstrument);
+                    }
+
+                    foreach (var strategiesPerId in strategies)
+                    {
+                        var strategy = strategiesPerId.Value;
+
+                        if (strategy.systemTradingMode != 'c')
+                            return;
+
+                        var type = strategy.GetType();
+
+                        if (type == typeof(Quoter))
+                        {
+                            strategy.ReloadConfig(config);
+                        }
+                    }
+                }
+
+                string pathBV = Directory.GetCurrentDirectory() + "/bv.xml";
+
+                var docBV = XDocument.Load(pathBV);
+
+                ii = 0;
+
+                foreach (var bv in docBV.Descendants("BV"))
+                {
+                    BVConfig config = new BVConfig
+                    (
+                        (string)bv.Element("nearInstrument"),
+                        (string)bv.Element("farInstrument"),
+                        (string)bv.Element("leanInstrument"),
+                        (int?)bv.Element("limitPlusSize"),
+                        (int?)bv.Element("nonLeanLimitPlusSize"),
+                        (double?)bv.Element("defaultBaseSpread")
+                    );
+
+                    foreach (var hedgeInstrument in bv.Elements("hedgeInstrument"))
+                    {
+                        if (hedgeInstrument.Attribute("class").Value == "correlated")
+                        {
+                            config.correlatedInstruments.Add((string)hedgeInstrument);
+                        }
+                        else if (hedgeInstrument.Attribute("class").Value == "crossVenue")
+                        {
+                            config.crossVenueInstruments.Add((string)hedgeInstrument);
+                        }
+                    }
+
+                    config.crossVenueInstruments.Add(config.nearInstrument);
+
+                    var leanEl = bv.Element("leanInstrument");
+                    if (leanEl.Attribute("class").Value == "correlated")
+                    {
+                        config.correlatedInstruments.Add(config.leanInstrument);
+                    }
+                    else if (leanEl.Attribute("class").Value == "crossVenue")
+                    {
+                        config.crossVenueInstruments.Add(config.leanInstrument);
+                    }
+
+                    var farEl = bv.Element("farInstrument");
+                    if (farEl.Attribute("class").Value == "correlated")
+                    {
+                        config.correlatedInstruments.Add(config.farInstrument);
+                    }
+                    else if (farEl.Attribute("class").Value == "crossVenue")
+                    {
+                        config.crossVenueInstruments.Add(config.farInstrument);
+                    }
+
+                    foreach (var strategiesPerId in strategies)
+                    {
+                        var strategy = strategiesPerId.Value;
+
+                        if (strategy.systemTradingMode != 'c' || API.GetStrategyStatus(strategiesPerId.Key) != 0)
+                            return;
+
+                        var type = strategy.GetType();
+
+                        if (type == typeof(BV))
+                        {
+                            strategy.ReloadConfig(config);
+                        }
+                    }
+                }
+
+                foreach (var bv in docBV.Descendants("LimitBV"))
+                {
+                    BVConfig config = new BVConfig
+                    (
+                        (string)bv.Element("nearInstrument"),
+                        (string)bv.Element("farInstrument"),
+                        (string)bv.Element("leanInstrument"),
+                        (int?)bv.Element("limitPlusSize"),
+                        (int?)bv.Element("nonLeanLimitPlusSize"),
+                        (double?)bv.Element("defaultBaseSpread")
+                    );
+
+                    foreach (var hedgeInstrument in bv.Elements("hedgeInstrument"))
+                    {
+                        if (hedgeInstrument.Attribute("class").Value == "correlated")
+                        {
+                            config.correlatedInstruments.Add((string)hedgeInstrument);
+                        }
+                        else if (hedgeInstrument.Attribute("class").Value == "crossVenue")
+                        {
+                            config.crossVenueInstruments.Add((string)hedgeInstrument);
+                        }
+                    }
+
+                    config.crossVenueInstruments.Add(config.nearInstrument);
+
+                    var leanEl = bv.Element("leanInstrument");
+                    if (leanEl.Attribute("class").Value == "correlated")
+                    {
+                        config.correlatedInstruments.Add(config.leanInstrument);
+                    }
+                    else if (leanEl.Attribute("class").Value == "crossVenue")
+                    {
+                        config.crossVenueInstruments.Add(config.leanInstrument);
+                    }
+
+                    var farEl = bv.Element("farInstrument");
+                    if (farEl.Attribute("class").Value == "correlated")
+                    {
+                        config.correlatedInstruments.Add(config.farInstrument);
+                    }
+                    else if (farEl.Attribute("class").Value == "crossVenue")
+                    {
+                        config.crossVenueInstruments.Add(config.farInstrument);
+                    }
+
+                    foreach (var strategiesPerId in strategies)
+                    {
+                        var strategy = strategiesPerId.Value;
+
+                        if (strategy.systemTradingMode != 'c' || API.GetStrategyStatus(strategiesPerId.Key) != 0)
+                            return;
+
+                        var type = strategy.GetType();
+
+                        if (type == typeof(LimitBV))
+                        {
+                            strategy.ReloadConfig(config);
+                        }
+                    }
+                }
+
+                foreach (var strategiesPerId in strategies)
+                {
+                    var strategy = strategiesPerId.Value;
+
+                    if (strategy.systemTradingMode != 'c' || API.GetStrategyStatus(strategiesPerId.Key) != 0)
+                        return;
+
+                    var type = strategy.GetType();
+
+                    if (type == typeof(LimitBV))
+                    {
+                        //if (API.GetSecurityNumber(s.quoteIndex, 0).Length > 9) //NOT OUTRIGHT
+                        if (strategy.boxTargetPrice != 0) //CAREFUL - MUST NOT PUT AN EXACT 0.0 IN THE XML
+                        {
+                            quoteIndices.Add(strategy.quoteIndex);
+                            quoteFarIndices.Add(strategy.farIndex);
+                            leanIndices.Add(strategy.leanIndex);
+                            strategies[strategy.stgID].linkedBoxIndex = ii; //LINKING THE RELEVANT BOX ENTRY IN THE boxes ARRAYS
+                            API.SetBoxTargetPrice(strategy.stgID, strategy.boxTargetPrice);
+                            Combo combos = API.GetCombos(quoteIndices[ii]);
+                            Combo leanCombos = API.GetCombos(leanIndices[ii]);
+
+                            boxIndices = new int[4]; //leg1, leg2 of 1st calendar spread, then leg1 and leg2 of the 2nd cal spread
+                            boxIndices[0] = (combos.spreadList[0].buyLeg) % API.n;
+                            boxIndices[1] = (combos.spreadList[0].sellLeg) % API.n;
+                            boxIndices[2] = (leanCombos.spreadList[0].buyLeg) % API.n;
+                            boxIndices[3] = (leanCombos.spreadList[0].sellLeg) % API.n;
+                            for (int i = 0; i <= 3; i++)
+                                if (!outrightGlobal2LocalMap.ContainsKey(boxIndices[i]))
+                                {
+                                    outrightGlobal2LocalMap.Add(boxIndices[i], jj);
+                                    jj++;
+                                }
+
+                            boxes.Add(new Box(boxIndices));
+                            boxes[ii].targetPrice = API.GetBoxTargetPrice(strategy.stgID);
+                            boxes[ii].linkedStgID = strategy.stgID;
+                            ii++;
+                        }
+                    }
+                }
+
+                NBoxes = quoteIndices.Count;
+                boxHoldings = new Matrix(NBoxes, 1);
+                //outrightIndices = new int[2 * (NBoxes + 1)];
+                NOutrights = outrightGlobal2LocalMap.Count;
+                outrightIndices = new List<int>();
+
+                V = new Matrix(NBoxes, NOutrights);
+                beta = new Matrix(NOutrights, 1);
+                boxTargetPrices = new Matrix(NBoxes, 1);
+                outrightICMs = new Matrix(NOutrights, 1);
+                outrightTargetPrices = new Matrix(NOutrights, 1);
+
+                for (int i = 0; i < NBoxes; i++)
+                {
+                    Combo combos = API.GetCombos(quoteIndices[i]);
+                    Combo leanCombos = API.GetCombos(leanIndices[i]);
+
+                    //int placeInAllOutrights = allOutrightIndices.FindIndex(combos.spreadList[0].buyLeg % API.n);
+                    //V[i, i] = 1;
+                    //V[i, i + 1] = -1;
+                    //V[i, i + NBoxes + 1] = -1;
+                    //V[i, i + NBoxes + 2] = 1;
+
+                    V[i, outrightGlobal2LocalMap[boxes[i].indices[0]]] = 1;
+                    V[i, outrightGlobal2LocalMap[boxes[i].indices[1]]] = -1;
+                    V[i, outrightGlobal2LocalMap[boxes[i].indices[2]]] = -1;
+                    V[i, outrightGlobal2LocalMap[boxes[i].indices[3]]] = 1;
+
+
+                    //WE PRESUME THAT i's sellLeg is (i+1)'s buyLeg:
+                    //if (i == 0)
+                    //{
+                    //    outrightIndices[0] = combos.spreadList[0].buyLeg % API.n;
+                    //    outrightIndices[NBoxes + 1] = leanCombos.spreadList[0].buyLeg % API.n;
+                    //    outrightTargetPricesMap.Add(outrightIndices[0], 0);
+                    //    outrightTargetPricesMap.Add(outrightIndices[NBoxes + 1], 0);
+                    //}
+                    //outrightIndices[i + 1] = combos.spreadList[0].sellLeg % API.n;
+                    //outrightIndices[i + 1 + NBoxes + 1] = leanCombos.spreadList[0].sellLeg % API.n;
+                    //outrightTargetPricesMap.Add(outrightIndices[i + 1], 0);
+                    //outrightTargetPricesMap.Add(outrightIndices[i + 1 + NBoxes + 1], 0);
+                }
+
+                if (1 == 1)
+                {
+                    for (int j = 0; j < NBoxes; j++)
+                    {
+                        Combo combos = API.GetCombos(quoteIndices[j]);
+                        Combo farCombos = API.GetCombos(quoteFarIndices[j]);
+                        Combo leanCombos = API.GetCombos(leanIndices[j]);
+                        beta[j, 0] = API.GetOutrightPos(combos.spreadList[0].buyLeg) + API.GetOutrightPos(farCombos.spreadList[0].buyLeg);
+                        beta[j + 1, 0] = API.GetOutrightPos(combos.spreadList[0].sellLeg) + API.GetOutrightPos(farCombos.spreadList[0].sellLeg);
+                        beta[j + NBoxes + 1, 0] = API.GetOutrightPos(leanCombos.spreadList[0].buyLeg);
+                        beta[j + NBoxes + 2, 0] = API.GetOutrightPos(leanCombos.spreadList[0].sellLeg);
+                    }
+                    VVTInv = (V.Multiply(V.Transpose())).Inverse;
+                    boxHoldings = VVTInv.Multiply(V.Multiply(beta));
+                    VTVVTInv = V.Transpose().Multiply(VVTInv);
+                    for (int j = 0; j < NBoxes; j++)
+                        boxes[j].holding = (int)boxHoldings[j, 0];
+                }
+            }
+            catch (Exception e)
+            {
+                API.Log("Exception OnConnect: " + e.ToString() + "," + e.StackTrace);
+            }
+        }
+
         private void API_OnConnect()
         {
+            if (strategies.Count > 0)
+            {
+                if (strategies[0].systemTradingMode != 'c' || API.GetStrategyStatus(0) != 0)
+                {
+                    return;
+                }
+
+                strategies.Clear();
+            }
+            
             try
             {
                 API.Log("Connected");
@@ -557,13 +884,14 @@ namespace StrategyRunner
 
                 var doc = XDocument.Load(pathQuoter);
 
-                allOutrightIndices = new List<int>();
+                outrightIndices = new List<int>();
                 quoteIndices = new List<int>();
                 quoteFarIndices = new List<int>();
                 leanIndices = new List<int>();
                 boxes = new List<Box>();
 
                 int ii = 0;
+                int jj = 0;
 
                 foreach (var quoter in doc.Descendants("Quoter"))
                 {
@@ -730,17 +1058,19 @@ namespace StrategyRunner
                         Combo combos = API.GetCombos(quoteIndices[ii]);
                         Combo leanCombos = API.GetCombos(leanIndices[ii]);
 
-
-
-
                         boxIndices = new int[4]; //leg1, leg2 of 1st calendar spread, then leg1 and leg2 of the 2nd cal spread
                         boxIndices[0] = (combos.spreadList[0].buyLeg) % API.n;
                         boxIndices[1] = (combos.spreadList[0].sellLeg) % API.n;
                         boxIndices[2] = (leanCombos.spreadList[0].buyLeg) % API.n;
                         boxIndices[3] = (leanCombos.spreadList[0].sellLeg) % API.n;
                         for (int i = 0; i <= 3; i++)
-                            if (!allOutrightIndices.Contains(boxIndices[i]))
-                                allOutrightIndices.Add(boxIndices[i]);
+                            if (!outrightGlobal2LocalMap.ContainsKey(boxIndices[i]))
+                            {
+                                outrightIndices.Add(boxIndices[i]);
+                                outrightGlobal2LocalMap.Add(boxIndices[i], jj);
+                                jj++;
+                                outrightTargetPricesMap.Add(boxIndices[i], 0);
+                            }
 
                         boxes.Add(new Box(boxIndices));
                         boxes[ii].targetPrice = API.GetBoxTargetPrice(s.stgID);
@@ -752,8 +1082,8 @@ namespace StrategyRunner
                 NBoxes = quoteIndices.Count;
                 boxHoldings = new Matrix(NBoxes, 1);
                 //outrightIndices = new int[2 * (NBoxes + 1)];
-                NOutrights = allOutrightIndices.Count;
-                outrightIndices = new int[NOutrights];
+                NOutrights = outrightGlobal2LocalMap.Count;
+                //outrightIndices = new int[NOutrights];
 
                 V = new Matrix(NBoxes, NOutrights);
                 beta = new Matrix(NOutrights, 1);
@@ -769,23 +1099,29 @@ namespace StrategyRunner
                     Combo leanCombos = API.GetCombos(leanIndices[i]);
 
                     //int placeInAllOutrights = allOutrightIndices.FindIndex(combos.spreadList[0].buyLeg % API.n);
-                    V[i, i] = 1;
-                    V[i, i + 1] = -1;
-                    V[i, i + NBoxes + 1] = -1;
-                    V[i, i + NBoxes + 2] = 1;
+                    //V[i, i] = 1;
+                    //V[i, i + 1] = -1;
+                    //V[i, i + NBoxes + 1] = -1;
+                    //V[i, i + NBoxes + 2] = 1;
+
+                    V[i, outrightGlobal2LocalMap[boxes[i].indices[0]]] = 1;
+                    V[i, outrightGlobal2LocalMap[boxes[i].indices[1]]] = -1;
+                    V[i, outrightGlobal2LocalMap[boxes[i].indices[2]]] = -1;
+                    V[i, outrightGlobal2LocalMap[boxes[i].indices[3]]] = 1;
+
 
                     //WE PRESUME THAT i's sellLeg is (i+1)'s buyLeg:
-                    if (i == 0)
-                    {
-                        outrightIndices[0] = combos.spreadList[0].buyLeg % API.n; 
-                        outrightIndices[NBoxes + 1] = leanCombos.spreadList[0].buyLeg % API.n;
-                        outrightTargetPricesMap.Add(outrightIndices[0], 0);
-                        outrightTargetPricesMap.Add(outrightIndices[NBoxes + 1], 0);
-                    }
-                    outrightIndices[i + 1] = combos.spreadList[0].sellLeg % API.n;
-                    outrightIndices[i + 1 + NBoxes + 1] = leanCombos.spreadList[0].sellLeg % API.n;
-                    outrightTargetPricesMap.Add(outrightIndices[i+1], 0);
-                    outrightTargetPricesMap.Add(outrightIndices[i + 1 + NBoxes + 1], 0);
+                    //if (i == 0)
+                    //{
+                    //    outrightIndices[0] = combos.spreadList[0].buyLeg % API.n; 
+                    //    outrightIndices[NBoxes + 1] = leanCombos.spreadList[0].buyLeg % API.n;
+                    //    outrightTargetPricesMap.Add(outrightIndices[0], 0);
+                    //    outrightTargetPricesMap.Add(outrightIndices[NBoxes + 1], 0);
+                    //}
+                    //outrightIndices[i + 1] = combos.spreadList[0].sellLeg % API.n;
+                    //outrightIndices[i + 1 + NBoxes + 1] = leanCombos.spreadList[0].sellLeg % API.n;
+                    //outrightTargetPricesMap.Add(outrightIndices[i+1], 0);
+                    //outrightTargetPricesMap.Add(outrightIndices[i + 1 + NBoxes + 1], 0);
                 }
 
                 if (1 == 1)
@@ -903,13 +1239,13 @@ namespace StrategyRunner
                         boxTargetPrices[i, 0] = boxes[i].targetPrice;
                         API.SetBoxTargetPrice(boxes[i].linkedStgID, boxes[i].targetPrice);
                     }
-                    for (int i = 0; i < outrightIndices.Length; i++)
+                    for (int i = 0; i < outrightIndices.Count; i++)
                     {
                         outrightICMs[i, 0] = API.GetImprovedCM(outrightIndices[i]);
                     }
 
                     outrightTargetPrices = outrightICMs.Addition(VTVVTInv.Multiply(boxTargetPrices.Subtraction(V.Multiply(outrightICMs))));
-                    for (int i = 0; i < outrightIndices.Length; i++)
+                    for (int i = 0; i < outrightIndices.Count; i++)
                         outrightTargetPricesMap[outrightIndices[i]] = outrightTargetPrices[i,0];
 
                     if (strategies.ContainsKey(stgID))
@@ -939,6 +1275,8 @@ namespace StrategyRunner
                             strategies[stgID].boxTargetPrice = 0;
                     }
                 }
+                if ((stgID==11) | (stgID==26) | (stgID==38))
+                { }
                 if (strategies.ContainsKey(stgID))
                     strategies[stgID].OnProcessMD(vi);
             }
@@ -966,6 +1304,7 @@ namespace StrategyRunner
                         if (strategy.correlatedIndices.Contains(instrumentIndex) || strategy.crossVenueIndices.Contains(instrumentIndex))
                         {
                             strategy.OnDeal(deal);
+                            break;
                         }
                     }
                 }
